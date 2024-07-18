@@ -10,6 +10,15 @@ pub struct CoinbaseOutput {
     output_script_value: String,
 }
 
+impl CoinbaseOutput {
+    pub fn new(output_script_type: String, output_script_value: String) -> Self {
+        Self {
+            output_script_type,
+            output_script_value,
+        }
+    }
+}
+
 impl TryFrom<&CoinbaseOutput> for CoinbaseOutput_ {
     type Error = Error;
 
@@ -43,6 +52,45 @@ pub struct ProxyConfig {
     pub timeout: Duration,
     pub coinbase_outputs: Vec<CoinbaseOutput>,
     pub test_only_do_not_send_solution_to_tp: Option<bool>,
+}
+
+impl ProxyConfig {
+    pub fn new(
+        downstream_address: String,
+        downstream_port: u16,
+        max_supported_version: u16,
+        min_supported_version: u16,
+        min_extranonce2_size: u16,
+        withhold: bool,
+        authority_public_key: Secp256k1PublicKey,
+        authority_secret_key: Secp256k1SecretKey,
+        cert_validity_sec: u64,
+        tp_address: String,
+        tp_authority_public_key: Option<Secp256k1PublicKey>,
+        retry: u32,
+        upstreams: Vec<Upstream>,
+        timeout: Duration,
+        coinbase_outputs: Vec<CoinbaseOutput>,
+    ) -> Self {
+        Self {
+            downstream_address,
+            downstream_port,
+            max_supported_version,
+            min_supported_version,
+            min_extranonce2_size,
+            withhold,
+            authority_public_key,
+            authority_secret_key,
+            cert_validity_sec,
+            tp_address,
+            tp_authority_public_key,
+            retry,
+            upstreams,
+            timeout,
+            coinbase_outputs,
+            test_only_do_not_send_solution_to_tp: None,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, Clone)]

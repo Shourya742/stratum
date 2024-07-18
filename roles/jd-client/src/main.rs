@@ -8,9 +8,18 @@ use lib::{
     status, JobDeclaratorClient,
 };
 
+use async_channel::unbounded;
+use futures::{select, FutureExt};
+use roles_logic_sv2::utils::Mutex;
+use std::{
+    net::{IpAddr, SocketAddr},
+    str::FromStr,
+    sync::Arc,
+};
+
 use args::Args;
 use ext_config::{Config, File, FileFormat};
-use tracing::error;
+use tracing::{error, info};
 
 /// Process CLI args and load configuration.
 #[allow(clippy::result_large_err)]
@@ -88,7 +97,6 @@ fn process_cli_args<'a>() -> ProxyResult<'a, ProxyConfig> {
 /// commit a job with upstream we require a new one. Having always a token when needed means that
 /// whenever we want to commit a mining job we can do that without waiting for upstream to provide
 /// a new token.
-///
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt::init();
@@ -99,7 +107,98 @@ async fn main() {
             return;
         }
     };
+    let task_collector = Arc::new(Mutex::new(vec![]));
+    let mut upstream_index = 0;
+    let mut interrupt_signal_future = Box::pin(tokio::signal::ctrl_c().fuse());
+    loop {
+        let jdc = JobDeclaratorClient::new(proxy_config.clone(), task_collector.clone());
+        let rx_status;
+        if let Some(upstream) = proxy_config.upstreams.get(upstream_index) {
+            let upstream_addr =
+                SocketAddr::from_str(upstream.pool_address.as_str()).expect("Invalid pool address");
+            let upstream_socket = {
+                loop {
+                    match tokio::net::TcpStream::connect(upstream_addr).await {
+                        Ok(s) => break s,
+                        Err(e) => {
+                            error!(
+                                "Failed to connect to upstream, retrying in 3 seconds: {}",
+                                e
+                            );
+                            tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                        }
+                    }
+                }
+            };
+            rx_status = jdc.initialize_jd(upstream.clone(), upstream_socket).await;
+        } else {
+            rx_status = jdc.initialize_jd_as_solo_miner().await;
+        }
+        // Check all tasks if is_finished() is true, if so exit
+        loop {
+            let task_status = select! {
+              task_status = rx_status.recv().fuse() => task_status,
+              interrupt_signal = interrupt_signal_future => {
+                match interrupt_signal {
+                  Ok(()) => {
+                    info!("Interrupt received");
+                  },
+                  Err(err) => {
+                    error!("Unable to listen for interrupt signal: {}", err);
+                    // we also shut down in case of error
+                  },
+                }
+                std::process::exit(0);
+              }
+            };
+            let task_status: status::Status = task_status.unwrap();
 
-    let jdc = JobDeclaratorClient::new(proxy_config);
-    jdc.start().await;
+            match task_status.state {
+                // Should only be sent by the downstream listener
+                status::State::DownstreamShutdown(err) => {
+                    error!("SHUTDOWN from: {}", err);
+                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                    task_collector
+                        .safe_lock(|s| {
+                            for handle in s {
+                                handle.abort();
+                            }
+                        })
+                        .unwrap();
+                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                    break;
+                }
+                status::State::UpstreamShutdown(err) => {
+                    error!("SHUTDOWN from: {}", err);
+                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                    task_collector
+                        .safe_lock(|s| {
+                            for handle in s {
+                                handle.abort();
+                            }
+                        })
+                        .unwrap();
+                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                    break;
+                }
+                status::State::UpstreamRogue => {
+                    error!("Changin Pool");
+                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                    task_collector
+                        .safe_lock(|s| {
+                            for handle in s {
+                                handle.abort();
+                            }
+                        })
+                        .unwrap();
+                    upstream_index += 1;
+                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                    break;
+                }
+                status::State::Healthy(msg) => {
+                    info!("HEALTHY message: {}", msg);
+                }
+            }
+        }
+    }
 }

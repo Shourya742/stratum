@@ -146,7 +146,7 @@ impl Upstream {
     /// from the `Downstream`.
     #[cfg_attr(feature = "cargo-clippy", allow(clippy::too_many_arguments))]
     pub async fn new(
-        address: SocketAddr,
+        socket: TcpStream,
         authority_public_key: Secp256k1PublicKey,
         min_extranonce_size: u16,
         pool_signature: String,
@@ -154,21 +154,6 @@ impl Upstream {
         task_collector: Arc<Mutex<Vec<AbortHandle>>>,
         pool_chaneger_trigger: Arc<Mutex<PoolChangerTrigger>>,
     ) -> ProxyResult<'static, Arc<Mutex<Self>>> {
-        // Connect to the SV2 Upstream role retry connection every 5 seconds.
-        let socket = loop {
-            match TcpStream::connect(address).await {
-                Ok(socket) => break socket,
-                Err(e) => {
-                    error!(
-                        "Failed to connect to Upstream role at {}, retrying in 5s: {}",
-                        address, e
-                    );
-
-                    sleep(Duration::from_secs(5));
-                }
-            }
-        };
-
         let pub_key: Secp256k1PublicKey = authority_public_key;
         let initiator = Initiator::from_raw_k(pub_key.into_bytes())?;
 
