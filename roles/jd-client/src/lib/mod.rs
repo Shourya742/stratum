@@ -6,15 +6,15 @@ pub mod status;
 pub mod template_receiver;
 pub mod upstream_sv2;
 
+pub use proxy_config::ProxyConfig;
+
 use std::{sync::atomic::AtomicBool, time::Duration};
 
 use job_declarator::JobDeclarator;
-use proxy_config::ProxyConfig;
 use template_receiver::TemplateRx;
 
-use async_channel::{bounded, unbounded};
-use futures::{select, FutureExt};
-use roles_logic_sv2::utils::Mutex;
+use async_channel::bounded;
+pub use roles_logic_sv2::utils::Mutex;
 use std::{
     net::{IpAddr, SocketAddr},
     str::FromStr,
@@ -54,111 +54,32 @@ pub static IS_NEW_TEMPLATE_HANDLED: AtomicBool = AtomicBool::new(true);
 /// switching to backup Pools in case of declared custom jobs refused by JDS (which is Pool side).
 /// As a solution of last-resort, it is able to switch to Solo Mining until new safe Pools appear
 /// in the market.
+#[derive(Clone)]
 pub struct JobDeclaratorClient {
     /// Configuration of the proxy server [`JobDeclaratorClient`] is connected to.
     config: ProxyConfig,
+    task_collector: Arc<Mutex<Vec<AbortHandle>>>,
 }
 
 impl JobDeclaratorClient {
-    pub fn new(config: ProxyConfig) -> Self {
-        Self { config }
-    }
-
-    pub async fn start(self) {
-        let mut upstream_index = 0;
-        let mut interrupt_signal_future = Box::pin(tokio::signal::ctrl_c().fuse());
-
-        // Channel used to manage failed tasks
-        let (tx_status, rx_status) = unbounded();
-
-        let task_collector = Arc::new(Mutex::new(vec![]));
-
-        let proxy_config = &self.config;
-
-        loop {
-            let task_collector = task_collector.clone();
-            let tx_status = tx_status.clone();
-            if let Some(upstream) = proxy_config.upstreams.get(upstream_index) {
-                self.initialize_jd(tx_status.clone(), task_collector.clone(), upstream.clone())
-                    .await;
-            } else {
-                self.initialize_jd_as_solo_miner(tx_status.clone(), task_collector.clone())
-                    .await;
-            }
-            // Check all tasks if is_finished() is true, if so exit
-            loop {
-                let task_status = select! {
-                    task_status = rx_status.recv().fuse() => task_status,
-                    interrupt_signal = interrupt_signal_future => {
-                        match interrupt_signal {
-                            Ok(()) => {
-                                info!("Interrupt received");
-                            },
-                            Err(err) => {
-                                error!("Unable to listen for interrupt signal: {}", err);
-                                // we also shut down in case of error
-                            },
-                        }
-                        std::process::exit(0);
-                    }
-                };
-                let task_status: status::Status = task_status.unwrap();
-
-                match task_status.state {
-                    // Should only be sent by the downstream listener
-                    status::State::DownstreamShutdown(err) => {
-                        error!("SHUTDOWN from: {}", err);
-                        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-                        task_collector
-                            .safe_lock(|s| {
-                                for handle in s {
-                                    handle.abort();
-                                }
-                            })
-                            .unwrap();
-                        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-                        break;
-                    }
-                    status::State::UpstreamShutdown(err) => {
-                        error!("SHUTDOWN from: {}", err);
-                        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-                        task_collector
-                            .safe_lock(|s| {
-                                for handle in s {
-                                    handle.abort();
-                                }
-                            })
-                            .unwrap();
-                        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-                        break;
-                    }
-                    status::State::UpstreamRogue => {
-                        error!("Changin Pool");
-                        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-                        task_collector
-                            .safe_lock(|s| {
-                                for handle in s {
-                                    handle.abort();
-                                }
-                            })
-                            .unwrap();
-                        upstream_index += 1;
-                        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-                        break;
-                    }
-                    status::State::Healthy(msg) => {
-                        info!("HEALTHY message: {}", msg);
-                    }
-                }
-            }
+    pub fn new(config: ProxyConfig, task_collector: Arc<Mutex<Vec<AbortHandle>>>) -> Self {
+        Self {
+            config,
+            task_collector,
         }
     }
 
-    async fn initialize_jd_as_solo_miner(
+    pub fn downstream_address(&self) -> SocketAddr {
+        SocketAddr::new(
+            IpAddr::from_str(&self.config.downstream_address).unwrap(),
+            self.config.downstream_port,
+        )
+    }
+
+    pub async fn initialize_jd_as_solo_miner(
         &self,
-        tx_status: async_channel::Sender<status::Status<'static>>,
-        task_collector: Arc<Mutex<Vec<AbortHandle>>>,
-    ) {
+    ) -> async_channel::Receiver<status::Status<'static>> {
+        let (tx_status, rx_status) = async_channel::unbounded();
         let proxy_config = &self.config;
         let timeout = proxy_config.timeout;
         let miner_tx_out = proxy_config::get_coinbase_output(proxy_config).unwrap();
@@ -182,7 +103,7 @@ impl JobDeclaratorClient {
             proxy_config.authority_public_key,
             proxy_config.authority_secret_key,
             proxy_config.cert_validity_sec,
-            task_collector.clone(),
+            self.task_collector.clone(),
             status::Sender::Downstream(tx_status.clone()),
             miner_tx_out.clone(),
             None,
@@ -201,42 +122,27 @@ impl JobDeclaratorClient {
             status::Sender::TemplateReceiver(tx_status.clone()),
             None,
             downstream,
-            task_collector,
+            self.task_collector.clone(),
             Arc::new(Mutex::new(PoolChangerTrigger::new(timeout))),
             miner_tx_out.clone(),
             proxy_config.tp_authority_public_key,
             false,
         )
         .await;
+        rx_status
     }
 
-    async fn initialize_jd(
-        &self,
-        tx_status: async_channel::Sender<status::Status<'static>>,
-        task_collector: Arc<Mutex<Vec<AbortHandle>>>,
+    pub async fn initialize_jd(
+        self,
         upstream_config: proxy_config::Upstream,
-    ) {
-        let proxy_config = &self.config;
+        upstream_socket: tokio::net::TcpStream,
+    ) -> async_channel::Receiver<status::Status<'static>> {
+        let (tx_status, rx_status) = async_channel::unbounded();
+        let proxy_config = self.config;
         let timeout = proxy_config.timeout;
         let test_only_do_not_send_solution_to_tp = proxy_config
             .test_only_do_not_send_solution_to_tp
             .unwrap_or(false);
-
-        // Format `Upstream` connection address
-        let mut parts = upstream_config.pool_address.split(':');
-        let address = parts
-            .next()
-            .unwrap_or_else(|| panic!("Invalid pool address {}", upstream_config.pool_address));
-        let port = parts
-            .next()
-            .and_then(|p| p.parse::<u16>().ok())
-            .unwrap_or_else(|| panic!("Invalid pool address {}", upstream_config.pool_address));
-        let upstream_addr = SocketAddr::new(
-            IpAddr::from_str(address).unwrap_or_else(|_| {
-                panic!("Invalid pool address {}", upstream_config.pool_address)
-            }),
-            port,
-        );
 
         // When Downstream receive a share that meets bitcoin target it transformit in a
         // SubmitSolution and send it to the TemplateReceiver
@@ -244,12 +150,12 @@ impl JobDeclaratorClient {
 
         // Instantiate a new `Upstream` (SV2 Pool)
         let upstream = match upstream_sv2::Upstream::new(
-            upstream_addr,
+            upstream_socket,
             upstream_config.authority_pubkey,
             0, // TODO
             upstream_config.pool_signature.clone(),
             status::Sender::Upstream(tx_status.clone()),
-            task_collector.clone(),
+            self.task_collector.clone(),
             Arc::new(Mutex::new(PoolChangerTrigger::new(timeout))),
         )
         .await
@@ -300,7 +206,7 @@ impl JobDeclaratorClient {
             upstream_config.authority_pubkey.into_bytes(),
             proxy_config.clone(),
             upstream.clone(),
-            task_collector.clone(),
+            self.task_collector.clone(),
         )
         .await
         {
@@ -311,40 +217,43 @@ impl JobDeclaratorClient {
                         state: status::State::UpstreamShutdown(e),
                     })
                     .await;
-                return;
+                panic!("error me");
             }
         };
 
         // Wait for downstream to connect
-        let downstream = downstream::listen_for_downstream_mining(
-            downstream_addr,
-            Some(upstream),
-            send_solution,
-            proxy_config.withhold,
-            proxy_config.authority_public_key,
-            proxy_config.authority_secret_key,
-            proxy_config.cert_validity_sec,
-            task_collector.clone(),
-            status::Sender::Downstream(tx_status.clone()),
-            vec![],
-            Some(jd.clone()),
-        )
-        .await
-        .unwrap();
-
-        TemplateRx::connect(
-            SocketAddr::new(IpAddr::from_str(ip_tp.as_str()).unwrap(), port_tp),
-            recv_solution,
-            status::Sender::TemplateReceiver(tx_status.clone()),
-            Some(jd.clone()),
-            downstream,
-            task_collector,
-            Arc::new(Mutex::new(PoolChangerTrigger::new(timeout))),
-            vec![],
-            proxy_config.tp_authority_public_key,
-            test_only_do_not_send_solution_to_tp,
-        )
-        .await;
+        let task_collector = self.task_collector.clone();
+        tokio::spawn(async move {
+            let downstream = downstream::listen_for_downstream_mining(
+                downstream_addr,
+                Some(upstream),
+                send_solution,
+                proxy_config.withhold,
+                proxy_config.authority_public_key,
+                proxy_config.authority_secret_key,
+                proxy_config.cert_validity_sec,
+                task_collector.clone(),
+                status::Sender::Downstream(tx_status.clone()),
+                vec![],
+                Some(jd.clone()),
+            )
+            .await
+            .unwrap();
+            TemplateRx::connect(
+                SocketAddr::new(IpAddr::from_str(ip_tp.as_str()).unwrap(), port_tp),
+                recv_solution,
+                status::Sender::TemplateReceiver(tx_status.clone()),
+                Some(jd.clone()),
+                downstream,
+                task_collector.clone(),
+                Arc::new(Mutex::new(PoolChangerTrigger::new(timeout))),
+                vec![],
+                proxy_config.tp_authority_public_key,
+                test_only_do_not_send_solution_to_tp,
+            )
+            .await;
+        });
+        rx_status
     }
 }
 
