@@ -66,6 +66,15 @@ pub struct CoinbaseOutput {
     output_script_value: String,
 }
 
+impl CoinbaseOutput {
+    pub fn new(output_script_type: String, output_script_value: String) -> Self {
+        Self {
+            output_script_type,
+            output_script_value,
+        }
+    }
+}
+
 impl TryFrom<&CoinbaseOutput> for CoinbaseOutput_ {
     type Error = Error;
 
@@ -94,6 +103,33 @@ pub struct Configuration {
     pub pool_signature: String,
     #[cfg(feature = "test_only_allow_unencrypted")]
     pub test_only_listen_adress_plain: String,
+}
+
+impl Configuration {
+    pub fn new(
+        listen_address: String,
+        tp_address: String,
+        tp_authority_public_key: Option<Secp256k1PublicKey>,
+        authority_public_key: Secp256k1PublicKey,
+        authority_secret_key: Secp256k1SecretKey,
+        cert_validity_sec: u64,
+        coinbase_outputs: Vec<CoinbaseOutput>,
+        pool_signature: String,
+        #[cfg(feature = "test_only_allow_unencrypted")] test_only_listen_adress_plain: String,
+    ) -> Self {
+        Self {
+            listen_address,
+            tp_address,
+            tp_authority_public_key,
+            authority_public_key,
+            authority_secret_key,
+            cert_validity_sec,
+            coinbase_outputs,
+            pool_signature,
+            #[cfg(feature = "test_only_allow_unencrypted")]
+            test_only_listen_adress_plain,
+        }
+    }
 }
 
 #[derive(Debug)]
