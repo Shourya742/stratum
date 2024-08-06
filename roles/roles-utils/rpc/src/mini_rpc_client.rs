@@ -31,6 +31,16 @@ impl MiniRpcClient {
         MiniRpcClient { client, url, auth }
     }
 
+    pub async fn health(&self) -> Result<(), RpcError> {
+        let response = self
+            .send_json_rpc_request("getblockchaininfo", json!([]))
+            .await;
+        match response {
+            Ok(_) => Ok(()),
+            Err(error) => Err(error),
+        }
+    }
+
     pub async fn get_raw_transaction(
         &self,
         txid: &String,
