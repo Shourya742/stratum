@@ -4,7 +4,9 @@ pub use roles_logic_sv2::utils::Mutex;
 use status::Status;
 use std::{
     net::{IpAddr, SocketAddr},
-    str::FromStr, sync::Arc,
+    str::FromStr,
+    sync::Arc,
+    time::Duration,
 };
 
 use tokio::{
@@ -85,7 +87,6 @@ impl TranslatorSv2 {
                 }
                 State::UpstreamTryReconnect(err) => {
                     error!("SHUTDOWN from: {}", err);
-
                     // kill al the tasks
                     let task_collector_aborting = task_collector_.clone();
                     kill_tasks(task_collector_aborting.clone());
