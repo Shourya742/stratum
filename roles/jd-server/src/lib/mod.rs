@@ -1,3 +1,4 @@
+pub mod core;
 pub mod error;
 pub mod job_declarator;
 pub mod mempool;
@@ -55,6 +56,15 @@ pub struct CoinbaseOutput {
     output_script_value: String,
 }
 
+impl CoinbaseOutput {
+    pub fn new(output_script_type: String, output_script_value: String) -> Self {
+        Self {
+            output_script_type,
+            output_script_value,
+        }
+    }
+}
+
 #[derive(Debug, Deserialize, Clone)]
 pub struct Configuration {
     #[serde(default = "default_true")]
@@ -70,6 +80,35 @@ pub struct Configuration {
     pub core_rpc_pass: String,
     #[serde(deserialize_with = "duration_from_toml")]
     pub mempool_update_interval: Duration,
+}
+
+impl Configuration {
+    pub fn new(
+        listen_jd_address: String,
+        authority_public_key: Secp256k1PublicKey,
+        authority_secret_key: Secp256k1SecretKey,
+        cert_validity_sec: u64,
+        coinbase_outputs: Vec<CoinbaseOutput>,
+        core_rpc_url: String,
+        core_rpc_port: u16,
+        core_rpc_user: String,
+        core_rpc_pass: String,
+        mempool_update_interval: Duration,
+    ) -> Self {
+        Self {
+            async_mining_allowed: true,
+            listen_jd_address,
+            authority_public_key,
+            authority_secret_key,
+            cert_validity_sec,
+            coinbase_outputs,
+            core_rpc_url,
+            core_rpc_port,
+            core_rpc_user,
+            core_rpc_pass,
+            mempool_update_interval,
+        }
+    }
 }
 
 fn default_true() -> bool {
