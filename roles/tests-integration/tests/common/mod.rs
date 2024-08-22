@@ -1,6 +1,13 @@
-use std::sync::Arc;
+use std::{path::PathBuf, sync::Arc};
 
 use async_std::net::TcpStream;
+use bitcoind::{
+    bitcoincore_rpc::{
+        bitcoin::key::rand::{distributions::Alphanumeric, thread_rng, Rng},
+        RpcApi,
+    },
+    BitcoinD,
+};
 use jd_server::core::JDServer;
 use key_utils::{Secp256k1PublicKey, Secp256k1SecretKey};
 use translator_sv2::proxy_config::{TranslatorProxyDownstream, TranslatorProxyUpstream};
@@ -59,11 +66,7 @@ pub async fn start_job_declarator_client(
     .expect("failed");
     let cert_validity_sec = 3600;
     let retry = 10;
-    let tp_address = "75.119.150.111:8442".to_string();
-    let tp_authority_public_key = Secp256k1PublicKey::try_from(
-        "9azQdassggC7L3YMVcZyRJmK7qrFDj5MZNHb4LkaUrJRUhct92W".to_string(),
-    )
-    .expect("failed");
+    let tp_address = "127.0.0.1:8442".to_string();
     let pool_address = "127.0.0.1:34254".to_string();
     let jd_address = "127.0.0.1:34264".to_string();
     let pool_signature = "Stratum v2 SRI Pool".to_string();
@@ -89,7 +92,7 @@ pub async fn start_job_declarator_client(
         authority_secret_key,
         cert_validity_sec,
         tp_address,
-        Some(tp_authority_public_key),
+        None,
         retry,
         upstreams,
         std::time::Duration::from_secs(300),
@@ -117,15 +120,11 @@ pub async fn start_sv2_pool() {
         "036adc3bdf21e6f9a0f0fb0066bf517e5b7909ed1563d6958a10993849a7554075".to_string(),
     )];
     let pool_signature = "Stratum v2 SRI Pool".to_string();
-    let tp_address = "75.119.150.111:8442".to_string();
-    let tp_authority_public_key = Secp256k1PublicKey::try_from(
-        "9azQdassggC7L3YMVcZyRJmK7qrFDj5MZNHb4LkaUrJRUhct92W".to_string(),
-    )
-    .expect("failed");
+    let tp_address = "127.0.0.1:8442".to_string();
     let config = Configuration::new(
         listen_address,
         tp_address,
-        Some(tp_authority_public_key),
+        None,
         authority_public_key,
         authority_secret_key,
         cert_validity_sec,
@@ -182,7 +181,7 @@ pub async fn start_sv2_translator(jd_client_address: String) -> translator_sv2::
         upstream_address,
         upstream_port,
         upstream_authority_pubkey,
-    upstream_difficulty_config
+        upstream_difficulty_config,
     );
     let translator_proxy_downstream = TranslatorProxyDownstream::new(
         downstream_address,
@@ -199,4 +198,64 @@ pub async fn start_sv2_translator(jd_client_address: String) -> translator_sv2::
 
     let translator_v2 = translator_sv2::TranslatorSv2::new(config);
     translator_v2
+}
+
+fn get_random_tmp_dir() -> PathBuf {
+    let s: String = thread_rng()
+        .sample_iter(&Alphanumeric)
+        .take(8)
+        .map(char::from)
+        .collect();
+    let path = "/tmp/.template-provider/".to_string() + &s;
+    PathBuf::from(path)
+}
+
+pub struct TemplateProvider {
+    bitcoind: BitcoinD,
+}
+
+impl TemplateProvider {
+    pub fn start() -> Self {
+        let temp_dir = get_random_tmp_dir();
+        let mut conf = bitcoind::Conf::default();
+        conf.args.push("-txindex=1");
+        conf.args.push("-sv2");
+        conf.args.push("-sv2port=8442");
+        conf.args.push("-debug=sv2");
+        conf.args.push("-sv2interval=20 -");
+        conf.args.push("-sv2feedelta=1000");
+        conf.args.push("-loglevel=sv2:trace");
+        conf.staticdir = Some(temp_dir.join(".bitcoin"));
+
+        let key = "BITCOIND_EXE";
+        let curr_dir_path = std::env::current_dir().unwrap();
+        let bitcoind_path = curr_dir_path.join("bin").join("bitcoind");
+        std::env::set_var(key, bitcoind_path);
+        let exe_path = bitcoind::exe_path().unwrap();
+
+        let bitcoind = BitcoinD::with_conf(exe_path, &conf).unwrap();
+        TemplateProvider { bitcoind }
+    }
+
+    pub fn stop(&self) {
+        let _ = self.bitcoind.client.stop().unwrap();
+    }
+
+    pub fn generate_blocks(&self, n: u64) {
+        let mining_address = self
+            .bitcoind
+            .client
+            .get_new_address(None, None)
+            .unwrap()
+            .require_network(bitcoind::bitcoincore_rpc::bitcoin::Network::Regtest)
+            .unwrap();
+        self.bitcoind
+            .client
+            .generate_to_address(n, &mining_address)
+            .unwrap();
+    }
+
+    pub fn get_block_count(&self) -> u64 {
+        self.bitcoind.client.get_block_count().unwrap()
+    }
 }

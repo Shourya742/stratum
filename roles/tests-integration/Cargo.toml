@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+bitcoind = "0.36.0"
 tokio = "1.38.1"
 
 [dev-dependencies]
