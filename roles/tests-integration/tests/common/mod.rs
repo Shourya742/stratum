@@ -227,9 +227,15 @@ impl TemplateProvider {
         conf.args.push("-loglevel=sv2:trace");
         conf.staticdir = Some(temp_dir.join(".bitcoin"));
 
+        let os = std::env::consts::OS;
+        let arch = std::env::consts::ARCH;
         let key = "BITCOIND_EXE";
         let curr_dir_path = std::env::current_dir().unwrap();
-        let bitcoind_path = curr_dir_path.join("bin").join("bitcoind");
+        let bitcoind_path = match (os, arch) {
+            ("macos", "aarch64") => curr_dir_path.join("bin").join("bitcoind_mac"),
+            ("macos", "x86_64") => curr_dir_path.join("bin").join("bitcoind_mac_x86"),
+            _ => curr_dir_path.join("bin").join("bitcoind"),
+        };
         std::env::set_var(key, bitcoind_path);
         let exe_path = bitcoind::exe_path().unwrap();
 
