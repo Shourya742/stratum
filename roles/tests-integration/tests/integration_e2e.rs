@@ -4,6 +4,8 @@ mod common;
 
 #[tokio::test]
 async fn test_jd_client_translator_sv2_pool_sv2_integration() {
+    let template_provider = common::TemplateProvider::start();
+    template_provider.generate_blocks(16);
     common::start_sv2_pool().await;
     common::start_job_declarator_server().await;
     let (jd_client, jd_client_config) = common::start_job_declarator_client().await;
@@ -13,8 +15,10 @@ async fn test_jd_client_translator_sv2_pool_sv2_integration() {
         "{}:{}",
         jd_client_config.downstream_address, jd_client_config.downstream_port
     );
+
     let pool_addr =
         SocketAddr::from_str(upstream.pool_address.as_str()).expect("Invalid pool address");
+
     let pool_socket = {
         loop {
             match tokio::net::TcpStream::connect(pool_addr).await {
@@ -36,4 +40,5 @@ async fn test_jd_client_translator_sv2_pool_sv2_integration() {
         dbg!("Here");
         assert_eq!(jd_client.downstream_address(), upstream_address);
     });
+    template_provider.stop();
 }

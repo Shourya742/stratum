@@ -7,6 +7,10 @@ edition = "2021"
 tokio = "1.38.1"
 
 [dev-dependencies]
+bitcoind = "0.36.0"
+flate2 = "1.0.32"
+minreq = { version = "2.12.0", features = ["https"] }
+tar = "0.4.41"
 jd_client = { version = "0.1.1", path = "../jd-client" }
 translator_sv2 = { version = "0.1.0", path = "../translator" }
 jd_server = { version = "0.1.1", path = "../jd-server" }
