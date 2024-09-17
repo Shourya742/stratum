@@ -9,12 +9,12 @@ use roles_logic_sv2::{
     parsers::JobDeclaration,
 };
 use std::{convert::TryInto, io::Cursor};
-use stratum_common::bitcoin::{Transaction, Txid};
+use stratum_common::bitcoin::{psbt::serialize::Deserialize, Transaction, Txid};
 pub type SendTo = SendTo_<JobDeclaration<'static>, ()>;
 use super::{signed_token, TransactionState};
 use roles_logic_sv2::{errors::Error, parsers::PoolMessages as AllMessages};
 use stratum_common::bitcoin::consensus::Decodable;
-use tracing::info;
+use tracing::{error, info};
 
 use super::JobDeclaratorDownstream;
 
@@ -29,6 +29,28 @@ impl JobDeclaratorDownstream {
             .try_into()
             .unwrap();
         let token_u32 = u32::from_le_bytes(four_byte_array);
+        let version = message.version;
+        let coinbase_prefix = message.coinbase_prefix.inner_as_ref();
+        let bip34_len = coinbase_prefix[0] as usize + 2;
+        assert_eq!(bip34_len, coinbase_prefix.len());
+        let coinbase_suffix = message.coinbase_suffix.inner_as_ref();
+
+        let mut coinbase: Vec<u8> =
+            Vec::with_capacity(coinbase_prefix.len() + coinbase_suffix.len());
+        coinbase.extend_from_slice(coinbase_prefix);
+        // coinbase.extend_from_slice(extranonce);
+        coinbase.extend_from_slice(coinbase_suffix);
+
+        // let coinbase = match Transaction::deserialize(&coinbase[..]) {
+        //     Ok(trans) => trans,
+        //     Err(e) => {
+        //         error!("Something went wrong!!, {}", e);
+        //         return false;
+        //     }
+        // };
+
+        error!("Coinbase value: {:?}", coinbase);
+
         // TODO Function to implement, it must be checked if the requested job has:
         // 1. right coinbase
         // 2. right version field
