@@ -31,25 +31,29 @@ impl JobDeclaratorDownstream {
         let token_u32 = u32::from_le_bytes(four_byte_array);
         let version = message.version;
         let coinbase_prefix = message.coinbase_prefix.inner_as_ref();
+        error!("---------------------------------------------------------------------------");
+        error!("Coinbase prefix: {:?}", coinbase_prefix);
+        error!("---------------------------------------------------------------------------");
         let bip34_len = coinbase_prefix[0] as usize + 2;
-        assert_eq!(bip34_len, coinbase_prefix.len());
+        // assert_eq!(bip34_len, coinbase_prefix.len());
         let coinbase_suffix = message.coinbase_suffix.inner_as_ref();
+        error!("---------------------------------------------------------------------------");
+        error!("Coinbase suffix: {:?}", coinbase_suffix);
+        error!("---------------------------------------------------------------------------");
 
+        error!("---------------------------------------------------------------------------");
+        let coinbase_output = self.coinbase_output.clone();
+        error!("Coinbase Output: {:?}", coinbase_output);
+        error!("---------------------------------------------------------------------------");
         let mut coinbase: Vec<u8> =
             Vec::with_capacity(coinbase_prefix.len() + coinbase_suffix.len());
         coinbase.extend_from_slice(coinbase_prefix);
         // coinbase.extend_from_slice(extranonce);
         coinbase.extend_from_slice(coinbase_suffix);
 
-        // let coinbase = match Transaction::deserialize(&coinbase[..]) {
-        //     Ok(trans) => trans,
-        //     Err(e) => {
-        //         error!("Something went wrong!!, {}", e);
-        //         return false;
-        //     }
-        // };
+        let coinbase_output_from_suffix = &coinbase_suffix[9..5 + coinbase_output.len()];
 
-        error!("Coinbase value: {:?}", coinbase);
+        assert_eq!(&coinbase_output[4..], coinbase_output_from_suffix);
 
         // TODO Function to implement, it must be checked if the requested job has:
         // 1. right coinbase
