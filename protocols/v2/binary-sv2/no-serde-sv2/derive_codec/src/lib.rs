@@ -2,6 +2,8 @@ extern crate proc_macro;
 use core::iter::FromIterator;
 use proc_macro::{Group, TokenStream, TokenTree};
 
+/// Checks if a `TokenStream` contains a group with a bracket delimiter,
+/// and further examines if the group has an identifier called `already_sized`.
 fn is_already_sized(item: TokenStream) -> bool {
     let stream = item.into_iter();
 
@@ -20,6 +22,9 @@ fn is_already_sized(item: TokenStream) -> bool {
     }
     false
 }
+
+/// Filters out attributes from a `TokenStream` that are prefixed with `#`,
+/// These attributes are typically used for meta-information in Rust code.
 fn remove_attributes(item: TokenStream) -> TokenStream {
     let stream = item.into_iter();
     let mut is_attribute = false;
@@ -60,6 +65,9 @@ enum ParserState {
     //       open angle brackets
     Generics(usize),
 }
+
+/// Parses the fields of a struct, scanning tokens to identify names,types and generics.
+/// Tracks and manages different parser states to handle field parsing, including names, types, and generic delimiters.
 fn parse_struct_fields(group: Vec<TokenTree>) -> Vec<ParsedField> {
     let mut fields = Vec::new();
     let mut field_ = ParsedField::new();
@@ -129,6 +137,8 @@ fn parse_struct_fields(group: Vec<TokenTree>) -> Vec<ParsedField> {
     fields
 }
 
+/// Represents a parsed field within a struct.
+/// Each field contains a name, type, and any associated generics.
 #[derive(Clone, Debug)]
 struct ParsedField {
     name: String,
@@ -178,6 +188,8 @@ struct ParsedStruct {
 //     }
 // }
 
+/// Extracts and returns properties of a struct, including its name, generics, and fields.
+/// Parses the token stream after filtering out attributes.
 fn get_struct_properties(item: TokenStream) -> ParsedStruct {
     let item = remove_attributes(item);
     let mut stream = item.into_iter();
@@ -235,6 +247,14 @@ fn get_struct_properties(item: TokenStream) -> ParsedStruct {
     }
 }
 
+/// The `Decodable` macro automatically derives the `Decodable` trait for
+/// structs, allowing them to be initialized from byte slice. It utilizes
+/// the provided data to populate fields of the struct and constructs a vector
+/// of `FieldMaker` for structure representation. During the decoding process,
+/// it reads the encoded fields from the input data, updating the offset
+/// accordingly to ensure that all data is read correctly. The macro generates
+/// implementations for the `get_structure` and `from_decoded_fields` methods,
+/// facilitating the decoding of complex structure into RUST types.
 #[proc_macro_derive(Decodable)]
 pub fn decodable(item: TokenStream) -> TokenStream {
     let parsed_struct = get_struct_properties(item);
@@ -374,6 +394,14 @@ fn get_static_generics(gen: &str) -> &str {
     }
 }
 
+/// The `Encodable` macro derives the `Encodable` trait for structs, enabling
+/// them to be converted into a sequence of bytes. It transforms each field into a
+/// `DecodableField` and computes the total size of the encoded data. The macro
+/// creates an implementation of `From` to convert the struct into an `EncodableField`
+/// , which can then be serialized into byte streams. It also optionally implements the
+/// `GetSize` trait for types that require additional size computations, based on the
+/// `already_sized` attribute. This way. users can easily encode their custom types into
+/// a binary format sutiable for network transmission
 #[proc_macro_derive(Encodable, attributes(already_sized))]
 pub fn encodable(item: TokenStream) -> TokenStream {
     let is_already_sized = is_already_sized(item.clone());

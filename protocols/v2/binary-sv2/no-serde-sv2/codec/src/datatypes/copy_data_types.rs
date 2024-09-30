@@ -11,15 +11,14 @@ impl Fixed for bool {
     const SIZE: usize = 1;
 }
 
-// Boolean value. Encoded as an unsigned 1-bit integer,
-// True = 1, False = 0 with 7 additional padding bits in
-// the high positions.
-// x
-// Recipients MUST NOT interpret bits outside of the
-// least significant bit. Senders MAY set bits outside of
-// the least significant bit to any value without any
-// impact on meaning. This allows future use of other
-// bits as flag bits.
+/// Boolean data type implementation. This provides encoding and decoding for boolean values.
+/// A boolean is encoded as an unsigned 1-bit integer: `true` as 1 and `false` as 0. The remaining
+/// 7 bits are padding. Recipients must only interpret the least significant bit (LSB).
+///
+/// Behavior:
+/// - Encoding: `true` is encoded as `1`, `false` as `0`.
+/// - Decoding: Only the LSB is considered.
+/// - Future-proofing: Senders may set bits outside the LSB without affecting the meaning.
 impl<'a> Sv2DataType<'a> for bool {
     fn from_bytes_unchecked(data: &'a mut [u8]) -> Self {
         match data
@@ -85,6 +84,7 @@ impl Fixed for u64 {
     const SIZE: usize = 8;
 }
 
+/// Macro for implementing the `Sv2DataType` trait for unsigned integer types.
 macro_rules! impl_sv2_for_unsigned {
     ($a:ty) => {
         impl<'a> Sv2DataType<'a> for $a {
@@ -125,19 +125,21 @@ macro_rules! impl_sv2_for_unsigned {
         }
     };
 }
+
+// Implement Sv2DataType for u8, u16, u32, and u64 using the macro.
 impl_sv2_for_unsigned!(u8);
 impl_sv2_for_unsigned!(u16);
 impl_sv2_for_unsigned!(u32);
 impl_sv2_for_unsigned!(u64);
 
-// Impl f32 as a primitives
-
+// Implementation of the `Fixed` trait for `f32`.
 impl Fixed for f32 {
     const SIZE: usize = 4;
 }
 
 impl_sv2_for_unsigned!(f32);
 
+// Implementation of a 24-bit unsigned integer (`U24`).
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub struct U24(pub(crate) u32);
@@ -160,6 +162,7 @@ impl U24 {
 
 impl_sv2_for_unsigned!(U24);
 
+// Conversion between `u32` and `U24`.
 impl TryFrom<u32> for U24 {
     type Error = Error;
 

@@ -11,15 +11,35 @@ trait IntoOwned {
 pub use inner::Inner;
 pub use seq_inner::{Seq0255, Seq064K, Sv2Option};
 
+/// Type alias for a 4-byte slice or owned data represented using the `Inner`
+/// type with fixed-size configuration.
 pub type U32AsRef<'a> = Inner<'a, true, 4, 0, 0>;
+/// Type alias for a 32-byte slice or owned data (commonly used for cryptographic
+/// hashes or IDs) represented using the `Inner` type with fixed-size configuration.
 pub type U256<'a> = Inner<'a, true, 32, 0, 0>;
+/// Type alias for a 6-byte transaction ID (TxId) represented using the `Inner`
+/// type with fixed-size configuration.
 pub type ShortTxId<'a> = Inner<'a, true, 6, 0, 0>;
+/// Type alias for a 32-byte public key represented using the `Inner` type
+/// with fixed-size configuration.
 pub type PubKey<'a> = Inner<'a, true, 32, 0, 0>;
+/// Type alias for a 64-byte cryptographic signature represented using the
+/// `Inner` type with fixed-size configuration.
 pub type Signature<'a> = Inner<'a, true, 64, 0, 0>;
+/// Type alias for a variable-sized byte array with a maximum size of 32 bytes,
+/// represented using the `Inner` type with a 1-byte header.
 pub type B032<'a> = Inner<'a, false, 1, 1, 32>;
+/// Type alias for a variable-sized byte array with a maximum size of 255 bytes,
+/// represented using the `Inner` type with a 1-byte header.
 pub type B0255<'a> = Inner<'a, false, 1, 1, 255>;
+/// Type alias for a variable-sized string with a maximum size of 255 bytes,
+/// represented using the `Inner` type with a 1-byte header.
 pub type Str0255<'a> = Inner<'a, false, 1, 1, 255>;
+/// Type alias for a variable-sized byte array with a maximum size of 64 KB,
+/// represented using the `Inner` type with a 2-byte header.
 pub type B064K<'a> = Inner<'a, false, 1, 2, { u16::MAX as usize }>;
+/// Type alias for a variable-sized byte array with a maximum size of ~16 MB,
+/// represented using the `Inner` type with a 3-byte header.
 pub type B016M<'a> = Inner<'a, false, 1, 3, { 2_usize.pow(24) - 1 }>;
 
 impl<'decoder> From<[u8; 32]> for U256<'decoder> {
