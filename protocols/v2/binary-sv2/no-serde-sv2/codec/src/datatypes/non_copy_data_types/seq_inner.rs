@@ -55,7 +55,8 @@ impl<'a, const SIZE: usize> Seq064K<'a, super::inner::Inner<'a, true, SIZE, 0, 0
 #[cfg(not(feature = "no_std"))]
 use std::io::Read;
 
-/// The liftime is here only for type compatibility with serde-sv2
+/// `Seq0255` is a sequence that holds up to 255 elements.
+/// The lifetime parameter `'a` is used for type compatibility with serde-sv2.
 #[repr(C)]
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct Seq0255<'a, T>(pub Vec<T>, PhantomData<&'a T>);
@@ -95,7 +96,8 @@ impl<'a, T: GetSize> GetSize for Seq0255<'a, T> {
     }
 }
 
-/// The liftime is here only for type compatibility with serde-sv2
+/// `Seq064K` is a sequence that holds up to 65535 elements.
+/// The lifetime parameter `'a` is used for type compatibility with serde-sv2.
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct Seq064K<'a, T>(pub(crate) Vec<T>, PhantomData<&'a T>);
 

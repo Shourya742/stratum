@@ -17,7 +17,19 @@ use std::io::{Error as E, Read, Write};
 
 use std::convert::TryInto;
 
+/// The `Sv2DataType` trait defines methods for encoding and decoding data in the SV2 protocol.
+/// It is used for serializing and deserializing both fixed-size and dynamically-sized types.
+///
+/// Key Responsibilities:
+/// - Serialization: Converting data from in-memory representations to byte slices or streams.
+/// - Deserialization: Converting byte slices or streams back into the in-memory representation of the data.
+///
+/// This trait includes functions for both checked and unchecked conversions, providing flexibility in situations
+/// where error handling can be safely ignored.
 pub trait Sv2DataType<'a>: Sized + SizeHint + GetSize + TryInto<FieldMarker> {
+    /// Creates an instance of the type from a mutable byte slice, checking for size constraints.
+    ///
+    /// This function verifies that the provided byte slice has the correct size according to the type's size hint.
     fn from_bytes_(data: &'a mut [u8]) -> Result<Self, Error> {
         Self::size_hint(data, 0)?;
         Ok(Self::from_bytes_unchecked(data))

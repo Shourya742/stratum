@@ -10,13 +10,16 @@ use std::convert::TryFrom;
 #[cfg(not(feature = "no_std"))]
 use std::io::{Cursor, Read};
 
-/// Implmented by all the decodable structure, it can be derived for every structure composed only
-/// by primitives or other Decodable.
+/// Implmented by all the decodable structure, it can be derived for any structure composed only
+/// of primitives or other Decodable types. It defines methods to parse the structure from raw
+/// data and reconstruct it from decoded fields.
 pub trait Decodable<'a>: Sized {
     fn get_structure(data: &[u8]) -> Result<Vec<FieldMarker>, Error>;
 
     fn from_decoded_fields(data: Vec<DecodableField<'a>>) -> Result<Self, Error>;
 
+    /// Parses a structure from raw bytes by iterating through its fields and decoding them.
+    /// Splits the data based on field size and decodes each segment.
     fn from_bytes(data: &'a mut [u8]) -> Result<Self, Error> {
         let structure = Self::get_structure(data)?;
         let mut fields = Vec::new();
@@ -34,6 +37,8 @@ pub trait Decodable<'a>: Sized {
         Self::from_decoded_fields(fields)
     }
 
+    /// Reads a structure from a reader stream, Reads all available data into a buffer,
+    /// determines the structure, and then decodes each field from the buffer.
     #[cfg(not(feature = "no_std"))]
     fn from_reader(reader: &mut impl Read) -> Result<Self, Error> {
         let mut data = Vec::new();
@@ -51,7 +56,8 @@ pub trait Decodable<'a>: Sized {
     }
 }
 
-/// Passed to a decoder to define the structure of the data to be decoded
+/// Enum representing different types of primitive markers.
+/// Used to define the structure of primitive data types for decoding.
 #[derive(Debug, Clone, Copy)]
 pub enum PrimitiveMarker {
     U8,
@@ -71,17 +77,22 @@ pub enum PrimitiveMarker {
     B016M,
 }
 
-/// Passed to a decoder to define the structure of the data to be decoded
+/// Enum representing field markers, which define the structure of a data field.
+/// Fields can be primitives or nested structures.
 #[derive(Debug, Clone)]
 pub enum FieldMarker {
     Primitive(PrimitiveMarker),
     Struct(Vec<FieldMarker>),
 }
+
+/// A trait that provides a mechanism to retrieve the marker associated with a data field.
+/// This marker is used to help the decoder to identify and interpret the field type.
 pub trait GetMarker {
     fn get_marker() -> FieldMarker;
 }
 
-/// Used to contrustuct primitives is returned by the decoder
+/// Represents a decoded primitive data type, used by the decoder to construct messages,
+/// Includes various types like integers, floats and binary data.
 #[derive(Debug)]
 pub enum DecodablePrimitive<'a> {
     U8(u8),
@@ -101,13 +112,16 @@ pub enum DecodablePrimitive<'a> {
     B016M(B016M<'a>),
 }
 
-/// Used to contrustuct messages is returned by the decoder
+/// Represents a decoded field, which may either be a primitive or a nested structure.
+/// The decoder uses this to build the final decoded data.
 #[derive(Debug)]
 pub enum DecodableField<'a> {
     Primitive(DecodablePrimitive<'a>),
     Struct(Vec<DecodableField<'a>>),
 }
 
+/// Provide a size hint for each primitive marker.
+/// This method helps estimate the size of the data field represented by the marker.
 impl SizeHint for PrimitiveMarker {
     // PrimitiveMarker need introspection to return a size hint. This method is not implementeable
     fn size_hint(_data: &[u8], _offset: usize) -> Result<usize, Error> {
@@ -135,6 +149,8 @@ impl SizeHint for PrimitiveMarker {
     }
 }
 
+/// Provides a size hint for each field marker, which may be a primitive or a nested structure.
+/// Used to estimate the total size of data associated with a field.
 impl SizeHint for FieldMarker {
     // FieldMarker need introspection to return a size hint. This method is not implementeable
     fn size_hint(_data: &[u8], _offset: usize) -> Result<usize, Error> {
@@ -155,6 +171,7 @@ impl SizeHint for FieldMarker {
     }
 }
 
+/// Implements size hinting for a vector of field markers, summing the size of individual marker.
 impl SizeHint for Vec<FieldMarker> {
     // FieldMarker need introspection to return a size hint. This method is not implementeable
     fn size_hint(_data: &[u8], _offset: usize) -> Result<usize, Error> {
@@ -171,12 +188,15 @@ impl SizeHint for Vec<FieldMarker> {
     }
 }
 
+/// Converts a `PrimitiveMarker` into a `FieldMarker`
 impl From<PrimitiveMarker> for FieldMarker {
     fn from(v: PrimitiveMarker) -> Self {
         FieldMarker::Primitive(v)
     }
 }
 
+/// Attempts to convert a vector of field markers into a single field marker, representing a structure.
+/// Returns an error if the vector is empty.
 impl TryFrom<Vec<FieldMarker>> for FieldMarker {
     type Error = crate::Error;
 
@@ -202,6 +222,8 @@ impl<'a> From<DecodableField<'a>> for Vec<DecodableField<'a>> {
     }
 }
 
+/// Defines the decoding process for a primitive marker, which parses a segment of data
+/// and returns the corresponding `DecodablePrimitive`.
 impl PrimitiveMarker {
     fn decode<'a>(&self, data: &'a mut [u8], offset: usize) -> DecodablePrimitive<'a> {
         match self {
@@ -287,6 +309,8 @@ impl<'a> GetSize for DecodablePrimitive<'a> {
     }
 }
 
+/// Provides decoding functionality for a field marker by using the marker type to decode the
+/// corresponding data and return a DecodableFiel
 impl FieldMarker {
     pub(crate) fn decode<'a>(&self, data: &'a mut [u8]) -> Result<DecodableField<'a>, Error> {
         match self {
