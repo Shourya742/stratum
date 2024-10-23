@@ -5,7 +5,7 @@ members = [
     "buffer",
     "error-handling",
     "key-utils",
-    "bip32-key-derivation",
+    "bip32-key-derivation", "builder-macros",
 ]
 
 exclude = [
