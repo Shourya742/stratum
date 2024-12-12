@@ -126,8 +126,17 @@ impl TemplateProvider {
 
             unpack_tarball(&tarball_bytes, &temp_dir);
 
+            let bitcoind_binary = bitcoin_exe_home.join("bitcoind");
+
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let mut perms = std::fs::metadata(&bitcoind_binary).unwrap().permissions();
+                perms.set_mode(0o755);
+                std::fs::set_permissions(&bitcoind_binary, perms).unwrap();
+            }
+
             if os == "macos" {
-                let bitcoind_binary = bitcoin_exe_home.join("bitcoind");
                 std::process::Command::new("codesign")
                     .arg("--sign")
                     .arg("-")
