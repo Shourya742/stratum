@@ -137,6 +137,13 @@ impl TemplateProvider {
             }
 
             if os == "macos" {
+                std::process::Command::new("xattr")
+                    .arg("-d")
+                    .arg("com.apple.quarantine")
+                    .arg(&bitcoind_binary)
+                    .output()
+                    .expect("Failed to remove quarantine attribute");
+
                 std::process::Command::new("codesign")
                     .arg("--sign")
                     .arg("-")
