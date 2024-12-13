@@ -14,7 +14,7 @@ jobs:
     strategy:
       matrix:
         os:
-          - macos-latest
+          - macos-13
           - ubuntu-latest
         include:
           - os: macos-latest
@@ -41,7 +41,7 @@ jobs:
       - name: Roles Integration Tests (MAC)
         if: matrix.os == 'macos-latest'
         run: |
-          sudo cargo test --manifest-path=roles/Cargo.toml --verbose --test '*' -- --nocapture
+          cargo test --manifest-path=roles/Cargo.toml --verbose --test '*' -- --nocapture
 
       - name: Roles Integration Tests (LINUX)
         if: matrix.os == 'ubuntu-latest'
@@ -84,11 +84,11 @@ jobs:
       - name: Test (MAC)
         if: matrix.os == 'macos-latest'
         run: |
-          sudo cargo test --manifest-path=benches/Cargo.toml
-          sudo cargo test --manifest-path=common/Cargo.toml
-          sudo cargo test --manifest-path=protocols/Cargo.toml
-          sudo cargo test --manifest-path=roles/Cargo.toml
-          sudo cargo test --manifest-path=utils/Cargo.toml
+          cargo test --manifest-path=benches/Cargo.toml
+          cargo test --manifest-path=common/Cargo.toml
+          cargo test --manifest-path=protocols/Cargo.toml
+          cargo test --manifest-path=roles/Cargo.toml
+          cargo test --manifest-path=utils/Cargo.toml
 
       - name: Test (LINUX)
         if: matrix.os == 'ubuntu-latest'
@@ -102,7 +102,7 @@ jobs:
       - name: Property based testing (MAC)
         if: matrix.os == 'macos-latest'
         run: |
-          sudo cargo test --manifest-path=protocols/Cargo.toml --features prop_test
+          cargo test --manifest-path=protocols/Cargo.toml --features prop_test
 
       - name: Property based testing (LINUX)
         if: matrix.os == 'ubuntu-latest'
