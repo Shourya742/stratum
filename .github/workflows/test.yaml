@@ -99,7 +99,13 @@ jobs:
           cargo test --manifest-path=roles/Cargo.toml
           cargo test --manifest-path=utils/Cargo.toml
 
-      - name: Property based testing
+      - name: Property based testing (MAC)
+        if: matrix.os == 'macos-latest'
+        run: |
+          sudo cargo test --manifest-path=protocols/Cargo.toml --features prop_test
+
+      - name: Property based testing (LINUX)
+        if: matrix.os == 'ubuntu-latest'
         run: |
           cargo test --manifest-path=protocols/Cargo.toml --features prop_test
 
