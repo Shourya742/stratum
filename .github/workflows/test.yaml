@@ -38,7 +38,13 @@ jobs:
           cargo build --manifest-path=roles/Cargo.toml
           cargo build --manifest-path=utils/Cargo.toml
 
-      - name: Roles Integration Tests
+      - name: Roles Integration Tests (MAC)
+        if: matrix.os == 'macos-latest'
+        run: |
+          sudo cargo test --manifest-path=roles/Cargo.toml --verbose --test '*' -- --nocapture
+
+      - name: Roles Integration Tests (LINUX)
+        if: matrix.os == 'ubuntu-latest'
         run: |
           cargo test --manifest-path=roles/Cargo.toml --verbose --test '*' -- --nocapture
 
@@ -74,7 +80,18 @@ jobs:
           fi
         working-directory: utils/buffer/fuzz
 
-      - name: Test
+
+      - name: Test (MAC)
+        if: matrix.os == 'macos-latest'
+        run: |
+          sudo cargo test --manifest-path=benches/Cargo.toml
+          sudo cargo test --manifest-path=common/Cargo.toml
+          sudo cargo test --manifest-path=protocols/Cargo.toml
+          sudo cargo test --manifest-path=roles/Cargo.toml
+          sudo cargo test --manifest-path=utils/Cargo.toml
+
+      - name: Test (LINUX)
+        if: matrix.os == 'ubuntu-latest'
         run: |
           cargo test --manifest-path=benches/Cargo.toml
           cargo test --manifest-path=common/Cargo.toml
@@ -82,7 +99,13 @@ jobs:
           cargo test --manifest-path=roles/Cargo.toml
           cargo test --manifest-path=utils/Cargo.toml
 
-      - name: Property based testing
+      - name: Property based testing (MAC)
+        if: matrix.os == 'macos-latest'
+        run: |
+          sudo cargo test --manifest-path=protocols/Cargo.toml --features prop_test
+
+      - name: Property based testing (LINUX)
+        if: matrix.os == 'ubuntu-latest'
         run: |
           cargo test --manifest-path=protocols/Cargo.toml --features prop_test
 
