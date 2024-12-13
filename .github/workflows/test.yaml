@@ -40,7 +40,7 @@ jobs:
 
       - name: Roles Integration Tests
         run: |
-          cargo test --manifest-path=roles/Cargo.toml --verbose --test '*' -- --nocapture
+          sudo cargo test --manifest-path=roles/Cargo.toml --verbose --test '*' -- --nocapture
 
       - name: Run sv1-client-and-server example
         run: |
