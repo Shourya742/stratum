@@ -80,7 +80,18 @@ jobs:
           fi
         working-directory: utils/buffer/fuzz
 
-      - name: Test
+
+      - name: Test (MAC)
+        if: matrix.os == 'macos-latest'
+        run: |
+          sudo cargo test --manifest-path=benches/Cargo.toml
+          sudo cargo test --manifest-path=common/Cargo.toml
+          sudo cargo test --manifest-path=protocols/Cargo.toml
+          sudo cargo test --manifest-path=roles/Cargo.toml
+          sudo cargo test --manifest-path=utils/Cargo.toml
+
+      - name: Test (LINUX)
+        if: matrix.os == 'ubuntu-latest'
         run: |
           cargo test --manifest-path=benches/Cargo.toml
           cargo test --manifest-path=common/Cargo.toml
