@@ -38,9 +38,15 @@ jobs:
           cargo build --manifest-path=roles/Cargo.toml
           cargo build --manifest-path=utils/Cargo.toml
 
-      - name: Roles Integration Tests
+      - name: Roles Integration Tests (MAC)
+        if: matrix.os == 'macos-latest'
         run: |
-          sudo -E cargo test --manifest-path=roles/Cargo.toml --verbose --test '*' -- --nocapture
+          sudo cargo test --manifest-path=roles/Cargo.toml --verbose --test '*' -- --nocapture
+
+      - name: Roles Integration Tests (LINUX)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          cargo test --manifest-path=roles/Cargo.toml --verbose --test '*' -- --nocapture
 
       - name: Run sv1-client-and-server example
         run: |
