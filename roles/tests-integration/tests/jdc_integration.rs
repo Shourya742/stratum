@@ -13,9 +13,9 @@ use roles_logic_sv2::{
 #[tokio::test(flavor = "multi_thread", worker_threads = 3)]
 // #[tokio::test]
 async fn test_jdc_pool_fallback_after_submit_rejection() {
-    // console_subscriber::ConsoleLayer::builder()
-    //     .server_addr(([127, 0, 0, 1], 6669))
-    //     .init();
+    console_subscriber::ConsoleLayer::builder()
+        .server_addr(([127, 0, 0, 1], 6669))
+        .init();
     let message = PoolMessages::Mining(Mining::SubmitSharesError(SubmitSharesError {
         channel_id: 0,
         sequence_number: 0,
@@ -37,6 +37,7 @@ async fn test_jdc_pool_fallback_after_submit_rejection() {
         )]),
     )
     .await;
+
     let (_, pool_addr_2) = start_pool(Some(tp_addr)).await;
     let (sniffer_2, sniffer_addr_2) =
         start_sniffer("1".to_string(), pool_addr_2, false, None).await;
