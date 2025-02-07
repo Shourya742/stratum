@@ -57,3 +57,10 @@ cargo add framing_sv2
 This crate can be built with the following feature flags:
 
 - `with_buffer_pool`: Enables buffer pooling for more efficient memory management.
+
+### Examples
+
+This crate provides an example demonstrating how to serialize and deserialize Sv2 message frames:
+
+1. **[Sv2 Frame](https://github.com/stratum-mining/stratum/blob/main/protocols/v2/framing-sv2/examples/sv2_frame.rs)**:
+   Constructs, serializes, and deserialize a regular Sv2 message frame (`Sv2Frame`).
