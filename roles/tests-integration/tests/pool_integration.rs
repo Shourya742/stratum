@@ -21,7 +21,6 @@ use roles_logic_sv2::{
 // Pool will connect to the Sniffer, and the Sniffer will connect to the Template Provider.
 #[tokio::test]
 async fn success_pool_template_provider_connection() {
-    start_tracing();
     let (_tp, tp_addr) = start_template_provider(None).await;
     let (sniffer, sniffer_addr) = start_sniffer("".to_string(), tp_addr, true, None).await;
     let _ = start_pool(Some(sniffer_addr)).await;

@@ -1,4 +1,5 @@
 use crate::{sniffer::*, template_provider::*};
+use ctor::ctor;
 use jd_client::JobDeclaratorClient;
 use jd_server::JobDeclaratorServer;
 use key_utils::{Secp256k1PublicKey, Secp256k1SecretKey};
@@ -20,7 +21,8 @@ mod utils;
 
 static LOGGER: Once = Once::new();
 
-pub fn start_tracing() {
+#[ctor]
+fn start_tracing() {
     LOGGER.call_once(|| {
         tracing_subscriber::fmt()
             .with_env_filter(EnvFilter::from_default_env())

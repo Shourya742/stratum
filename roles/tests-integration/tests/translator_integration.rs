@@ -14,7 +14,6 @@ use roles_logic_sv2::parsers::{CommonMessages, Mining, PoolMessages};
 // shares.
 #[tokio::test]
 async fn translate_sv1_to_sv2_successfully() {
-    start_tracing();
     let (_tp, tp_addr) = start_template_provider(None).await;
     let (_pool, pool_addr) = start_pool(Some(tp_addr)).await;
     let (pool_translator_sniffer, pool_translator_sniffer_addr) =
