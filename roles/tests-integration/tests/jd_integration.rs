@@ -1,3 +1,9 @@
+// This file contains integration tests for the `JDC/S` module.
+//
+// `JDC/S` is a module that implements the Job Distributor role in the Stratum V2 protocol.
+//
+// Note that it is enough to call `start_tracing()` once in the test suite to enable tracing for
+// all tests. This is because tracing is a global setting.
 use integration_tests_sv2::*;
 
 use roles_logic_sv2::parsers::{CommonMessages, PoolMessages};
