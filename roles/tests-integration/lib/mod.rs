@@ -11,7 +11,11 @@ use std::{
     str::FromStr,
     sync::Once,
 };
+use tracing_subscriber::filter::LevelFilter;
+use tracing_subscriber::fmt;
 use tracing_subscriber::EnvFilter;
+use tracing_subscriber::prelude::__tracing_subscriber_SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
 use translator_sv2::TranslatorSv2;
 use utils::get_available_address;
 
@@ -23,9 +27,14 @@ static LOGGER: Once = Once::new();
 
 pub fn start_tracing() {
     LOGGER.call_once(|| {
-        tracing_subscriber::fmt()
-            .with_env_filter(EnvFilter::from_default_env())
-            .init();
+        tracing_subscriber::registry()
+	        .with(fmt::layer())
+	        .with(
+	            EnvFilter::builder()
+	                .with_default_directive(LevelFilter::DEBUG.into())
+	                .from_env_lossy(),
+	        )
+	        .init();
     });
 }
 
