@@ -5,6 +5,10 @@ pub use crate::lib::{
 };
 use tracing::error;
 mod lib;
+use tracing_subscriber::{filter::LevelFilter, EnvFilter};
+use tracing_subscriber::prelude::__tracing_subscriber_SubscriberExt;
+use tracing_subscriber::fmt;
+use tracing_subscriber::util::SubscriberInitExt;
 
 use ext_config::{Config, File, FileFormat};
 
@@ -73,7 +77,14 @@ mod args {
 
 #[tokio::main]
 async fn main() {
-    tracing_subscriber::fmt::init();
+    tracing_subscriber::registry()
+    .with(fmt::layer())
+    .with(
+        EnvFilter::builder()
+            .with_default_directive(LevelFilter::DEBUG.into())
+            .from_env_lossy(),
+    )
+    .init();
     let args = match args::Args::from_args() {
         Ok(cfg) => cfg,
         Err(help) => {

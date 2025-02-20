@@ -8,6 +8,11 @@ use lib::{
     status, JobDeclaratorClient,
 };
 
+use tracing_subscriber::{filter::LevelFilter, EnvFilter};
+use tracing_subscriber::prelude::__tracing_subscriber_SubscriberExt;
+use tracing_subscriber::fmt;
+use tracing_subscriber::util::SubscriberInitExt;
+
 use args::Args;
 use ext_config::{Config, File, FileFormat};
 use tracing::error;
@@ -90,7 +95,14 @@ fn process_cli_args<'a>() -> ProxyResult<'a, ProxyConfig> {
 /// a new token.
 #[tokio::main]
 async fn main() {
-    tracing_subscriber::fmt::init();
+    tracing_subscriber::registry()
+    .with(fmt::layer())
+    .with(
+        EnvFilter::builder()
+            .with_default_directive(LevelFilter::DEBUG.into())
+            .from_env_lossy(),
+    )
+    .init();
     let proxy_config = match process_cli_args() {
         Ok(p) => p,
         Err(e) => {

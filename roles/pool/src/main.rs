@@ -4,6 +4,10 @@ mod lib;
 use ext_config::{Config, File, FileFormat};
 pub use lib::{mining_pool::Configuration, status, PoolSv2};
 use tracing::error;
+use tracing_subscriber::{filter::LevelFilter, EnvFilter};
+use tracing_subscriber::prelude::__tracing_subscriber_SubscriberExt;
+use tracing_subscriber::fmt;
+use tracing_subscriber::util::SubscriberInitExt;
 
 mod args {
     use std::path::PathBuf;
@@ -70,7 +74,14 @@ mod args {
 
 #[tokio::main]
 async fn main() {
-    tracing_subscriber::fmt::init();
+    tracing_subscriber::registry()
+    .with(fmt::layer())
+    .with(
+        EnvFilter::builder()
+            .with_default_directive(LevelFilter::DEBUG.into())
+            .from_env_lossy(),
+    )
+    .init();
 
     let args = match args::Args::from_args() {
         Ok(cfg) => cfg,

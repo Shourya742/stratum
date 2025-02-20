@@ -6,6 +6,10 @@ use args::Args;
 use error::{Error, ProxyResult};
 pub use lib::{downstream_sv1, error, proxy, proxy_config, status, upstream_sv2};
 use proxy_config::ProxyConfig;
+use tracing_subscriber::{filter::LevelFilter, EnvFilter};
+use tracing_subscriber::prelude::__tracing_subscriber_SubscriberExt;
+use tracing_subscriber::fmt;
+use tracing_subscriber::util::SubscriberInitExt;
 
 use ext_config::{Config, File, FileFormat};
 
@@ -37,7 +41,14 @@ fn process_cli_args<'a>() -> ProxyResult<'a, ProxyConfig> {
 
 #[tokio::main]
 async fn main() {
-    tracing_subscriber::fmt::init();
+    tracing_subscriber::registry()
+	        .with(fmt::layer())
+	        .with(
+	            EnvFilter::builder()
+	                .with_default_directive(LevelFilter::DEBUG.into())
+	                .from_env_lossy(),
+	        )
+	        .init();
 
     let proxy_config = match process_cli_args() {
         Ok(p) => p,
