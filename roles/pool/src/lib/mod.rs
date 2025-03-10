@@ -57,51 +57,54 @@ impl PoolSv2 {
 
         // Start the error handling loop
         // See `./status.rs` and `utils/error_handling` for information on how this operates
-        loop {
-            let task_status = select! {
-                task_status = status_rx.recv() => task_status,
-                interrupt_signal = tokio::signal::ctrl_c() => {
-                    match interrupt_signal {
-                        Ok(()) => {
-                            info!("Interrupt received");
-                        },
-                        Err(err) => {
-                            error!("Unable to listen for interrupt signal: {}", err);
-                            // we also shut down in case of error
-                        },
+        tokio::spawn(async move {
+            loop {
+                let task_status = select! {
+                    task_status = status_rx.recv() => task_status,
+                    interrupt_signal = tokio::signal::ctrl_c() => {
+                        match interrupt_signal {
+                            Ok(()) => {
+                                info!("Interrupt received");
+                            },
+                            Err(err) => {
+                                error!("Unable to listen for interrupt signal: {}", err);
+                                // we also shut down in case of error
+                            },
+                        }
+                        break;
                     }
-                    break Ok(());
-                }
-            };
-            let task_status: status::Status = task_status.unwrap();
+                };
+                let task_status: status::Status = task_status.unwrap();
 
-            match task_status.state {
-                // Should only be sent by the downstream listener
-                status::State::DownstreamShutdown(err) => {
-                    error!(
-                        "SHUTDOWN from Downstream: {}\nTry to restart the downstream listener",
-                        err
-                    );
-                    break Ok(());
-                }
-                status::State::TemplateProviderShutdown(err) => {
-                    error!("SHUTDOWN from Upstream: {}\nTry to reconnecting or connecting to a new upstream", err);
-                    break Ok(());
-                }
-                status::State::Healthy(msg) => {
-                    info!("HEALTHY message: {}", msg);
-                }
-                status::State::DownstreamInstanceDropped(downstream_id) => {
-                    warn!("Dropping downstream instance {} from pool", downstream_id);
-                    if pool
-                        .safe_lock(|p| p.remove_downstream(downstream_id))
-                        .is_err()
-                    {
-                        break Ok(());
+                match task_status.state {
+                    // Should only be sent by the downstream listener
+                    status::State::DownstreamShutdown(err) => {
+                        error!(
+                            "SHUTDOWN from Downstream: {}\nTry to restart the downstream listener",
+                            err
+                        );
+                        break;
+                    }
+                    status::State::TemplateProviderShutdown(err) => {
+                        error!("SHUTDOWN from Upstream: {}\nTry to reconnecting or connecting to a new upstream", err);
+                        break;
+                    }
+                    status::State::Healthy(msg) => {
+                        info!("HEALTHY message: {}", msg);
+                    }
+                    status::State::DownstreamInstanceDropped(downstream_id) => {
+                        warn!("Dropping downstream instance {} from pool", downstream_id);
+                        if pool
+                            .safe_lock(|p| p.remove_downstream(downstream_id))
+                            .is_err()
+                        {
+                            break;
+                        }
                     }
                 }
             }
-        }
+        });
+        Ok(())
     }
 }
 
