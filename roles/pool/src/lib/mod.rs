@@ -9,7 +9,7 @@ use async_channel::{bounded, unbounded};
 use config::PoolConfig;
 use error::PoolError;
 use mining_pool::{get_coinbase_output, Pool};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, OnceLock};
 use template_receiver::TemplateRx;
 use tracing::{error, info, warn};
 
@@ -18,29 +18,21 @@ use tokio::select;
 #[derive(Debug, Clone)]
 pub struct PoolSv2 {
     config: PoolConfig,
-    status_tx: Arc<Mutex<Option<async_channel::Sender<status::Status>>>>,
+    status_tx: Arc<OnceLock<async_channel::Sender<status::Status>>>,
 }
 
 impl PoolSv2 {
     pub fn new(config: PoolConfig) -> PoolSv2 {
         PoolSv2 {
             config,
-            status_tx: Arc::new(Mutex::new(None)),
+            status_tx: Arc::new(OnceLock::new()),
         }
     }
 
     pub async fn start(&self) -> Result<(), PoolError> {
         let config = self.config.clone();
         let (status_tx, status_rx) = unbounded();
-
-        if let Ok(mut s_tx) = self.status_tx.lock() {
-            *s_tx = Some(status_tx.clone());
-        } else {
-            error!("Failed to access Pool status lock");
-            return Err(PoolError::Custom(
-                "Failed to access Pool status lock".to_string(),
-            ));
-        }
+        self.status_tx.set(status_tx.clone()).unwrap();
         let (send_stop_signal, recv_stop_signal) = tokio::sync::watch::channel(());
         let (s_new_t, r_new_t) = bounded(10);
         let (s_prev_hash, r_prev_hash) = bounded(10);
@@ -128,28 +120,24 @@ impl PoolSv2 {
 
     pub fn shutdown(&self) {
         info!("Attempting to shutdown pool");
-        if let Ok(status_tx) = &self.status_tx.lock() {
-            if let Some(status_tx) = status_tx.as_ref().cloned() {
-                info!("Pool is running, sending shutdown signal");
-                tokio::spawn(async move {
-                    if let Err(e) = status_tx
-                        .send(status::Status {
-                            state: status::State::DownstreamShutdown(PoolError::Custom(
-                                "Shutdown".to_string(),
-                            )),
-                        })
-                        .await
-                    {
-                        error!("Failed to send shutdown signal to status loop: {:?}", e);
-                    } else {
-                        info!("Sent shutdown signal to Pool");
-                    }
-                });
-            } else {
-                info!("Pool is not running.");
-            }
+        if let Some(status_tx) = self.status_tx.get().cloned() {
+            info!("Pool is running, sending shutdown signal");
+            tokio::spawn(async move {
+                if let Err(e) = status_tx
+                    .send(status::Status {
+                        state: status::State::DownstreamShutdown(PoolError::Custom(
+                            "Shutdown".to_string(),
+                        )),
+                    })
+                    .await
+                {
+                    error!("Failed to send shutdown signal to status loop: {:?}", e);
+                } else {
+                    info!("Sent shutdown signal to Pool");
+                }
+            });
         } else {
-            error!("Failed to access Pool status lock");
+            info!("Pool is not running.");
         }
     }
 }
