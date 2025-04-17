@@ -13,14 +13,54 @@ use std::{collections::HashMap, ops::Range, sync::mpsc};
 
 /// Sample usage, currently it is blocking because we dont have any tokio in roles logic.
 // fn main() {
-//     let (tx, mut rx) = mpsc::channel();
-//     let value = StandardChannelFactoryActor::new(extended_extranonce_range_0, extended_extranonce_range_1, extended_extranonce_range_2, additional_coinbase_script_data, share_batch_size, rx, expected_share_per_minute_per_channel).unwrap();
-//     std::thread::spawn(value.run());
-//     let (tx2, rx2) = mpsc::channel();
-//     let message = StandardChannelFactoryMessage::NewGroupChannel { past_jobs_size: 2, respond_to: tx2 };
-//     tx.send(message);
-//     rx2.recv();
+//  let standard_factory = spawn_actor();
+//  standard_factor.create_group_channel(...);
 // }
+
+
+pub struct StandardChannelFactoryHandle {
+    sender: std::sync::mpsc::Sender<StandardChannelFactoryMessage>,
+}
+
+
+impl StandardChannelFactoryHandle {
+    pub fn new(sender: std::sync::mpsc::Sender<StandardChannelFactoryMessage>) -> Self {
+        Self { sender }
+    }
+
+    pub fn create_group_channel(&self, past_jobs_size: usize) -> Result<u32, StandardChannelFactoryError> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let msg = StandardChannelFactoryMessage::NewGroupChannel {
+            past_jobs_size,
+            respond_to: tx,
+        };
+        self.sender.send(msg).map_err(|_| StandardChannelFactoryError::PoisonError)?;
+        rx.recv().map_err(|_| StandardChannelFactoryError::PoisonError)?
+    }
+
+    pub fn submit_shares_standard(&self, msg: SubmitSharesStandard) -> Result<ShareValidationResult, StandardChannelFactoryError> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let msg = StandardChannelFactoryMessage::SubmitSharesStandard {
+            msg,
+            respond_to: tx,
+        };
+        self.sender.send(msg).map_err(|_| StandardChannelFactoryError::PoisonError)?;
+        rx.recv().map_err(|_| StandardChannelFactoryError::PoisonError)?
+    }
+}
+
+
+/// This will be called by client
+fn spawn_actor() -> StandardChannelFactoryHandle {
+    let (tx, rx) = std::sync::mpsc::channel();
+
+    let actor = StandardChannelFactoryActor::new(..., rx, ...).unwrap();
+
+    std::thread::spawn(move || actor.run());
+
+    StandardChannelFactoryHandle::new(tx)
+}
+
 pub enum StandardChannelFactoryMessage {
     NewGroupChannel {
         past_jobs_size: usize,
