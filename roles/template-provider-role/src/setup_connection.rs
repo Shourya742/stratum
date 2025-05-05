@@ -1,13 +1,12 @@
-use super::error::{TPError, TPResult};
-use super::StdFrame;
-use super::EitherFrame;
+use super::{
+    error::{TPError, TPResult},
+    EitherFrame, StdFrame,
+};
 use async_channel::{Receiver, Sender};
-use roles_logic_sv2::common_messages_sv2::SetupConnectionSuccess;
-use roles_logic_sv2::handlers::common::ParseCommonMessagesFromDownstream;
 use roles_logic_sv2::{
-    common_messages_sv2::SetupConnection,
+    common_messages_sv2::{SetupConnection, SetupConnectionSuccess},
     errors::Error,
-    handlers::common::SendTo,
+    handlers::common::{ParseCommonMessagesFromDownstream, SendTo},
     parsers::{AnyMessage, CommonMessages},
     utils::Mutex,
 };
@@ -17,13 +16,11 @@ use tracing::{debug, error, info};
 pub struct SetupConnectionHandler;
 
 impl SetupConnectionHandler {
-
     pub async fn setup(
         receiver: &mut Receiver<EitherFrame>,
         sender: &mut Sender<EitherFrame>,
         address: SocketAddr,
     ) -> TPResult<()> {
-
         let mut incoming: StdFrame = match receiver.recv().await {
             Ok(EitherFrame::Sv2(s)) => {
                 debug!("Got sv2 message: {:?}", s);

@@ -1,10 +1,9 @@
 use crate::{init_capnp, proxy_capnp};
 use capnp_rpc::{rpc_twoparty_capnp, twoparty, RpcSystem};
-use std::path::Path;
-use tokio::net::UnixStream;
-use tokio::task;
-use tokio_util::compat::*;
 use futures::FutureExt;
+use std::path::Path;
+use tokio::{net::UnixStream, task};
+use tokio_util::compat::*;
 
 pub async fn connect(
     socket_path: &Path,
