@@ -1,10 +1,11 @@
 #![allow(warnings)]
+use std::time::Duration;
+
 use async_channel::{Receiver, Sender};
 use codec_sv2::{Frame, HandshakeRole, StandardEitherFrame, StandardSv2Frame};
 use key_utils::{Secp256k1PublicKey, Secp256k1SecretKey};
 use network_helpers_sv2::noise_connection::Connection;
 use noise_sv2::Responder;
-use provider::start_provider;
 use roles_logic_sv2::parsers::{
     message_type_to_name, AnyMessage, CommonMessages, IsSv2Message,
     JobDeclaration::{
@@ -20,7 +21,9 @@ use tokio::{net::TcpListener, task::LocalSet};
 use tracing::info;
 
 mod error;
+mod message_utils;
 mod provider;
+mod rpc_client;
 mod setup_connection;
 
 pub type Message = AnyMessage<'static>;
@@ -43,7 +46,11 @@ pub mod proxy_capnp {
     include!(concat!(env!("OUT_DIR"), "/proxy_capnp.rs"));
 }
 
-#[derive(Debug)]
+use provider::Provider;
+use rpc_client::error::RpcClientError;
+use tracing::{debug, error};
+
+#[derive(Debug, Clone)]
 pub struct Config {
     sv2bind: String,
     sv2port: u16,
@@ -71,232 +78,225 @@ impl Config {
             sv2port,
             sv2interval,
             sv2feedelta,
-            authority_public_key: authority_public_key.parse().unwrap(),
-            authority_secret_key: authority_secret_key.parse().unwrap(),
+            authority_public_key: authority_public_key
+                .parse()
+                .expect("Invalid authority public key"),
+            authority_secret_key: authority_secret_key
+                .parse()
+                .expect("Invalid authority secret key"),
             cert_validity_sec,
             socket_path,
         }
     }
 }
 
-pub async fn start_template_provider(
-    Config {
-        sv2bind,
-        sv2port,
-        sv2feedelta,
-        sv2interval,
-        authority_public_key,
-        authority_secret_key,
-        cert_validity_sec,
-        socket_path,
-    }: Config,
-) {
+/// Main entry point to start the Template Provider service.
+pub async fn start_template_provider(config: Config) {
+    info!("Starting Template Provider service...");
     let (prev_hash_sender, prev_hash_receiver) = async_channel::unbounded::<EitherFrame>();
     let (template_sender, template_receiver) = async_channel::unbounded::<EitherFrame>();
     let (tx_data_response_sender, tx_data_response_receiver) =
         async_channel::unbounded::<EitherFrame>();
-    info!("All sender side channels are spawned");
-
     let (message_sender, message_receiver) = async_channel::unbounded::<EitherFrame>();
-    info!("All receiver side channels are spawned");
-
+    info!("Communication channels initialized.");
+    let network_config = config.clone();
     tokio::spawn(async move {
-        let listener = TcpListener::bind(format!("{sv2bind}:{sv2port}"))
-            .await
-            .unwrap();
-        info!("Starting listening: {}:{}", sv2bind, sv2port);
-
-        while let Ok((stream, address)) = listener.accept().await {
-            let prev_hash_receiver_clone = prev_hash_receiver.clone();
-            let template_receiver_clone = template_receiver.clone();
-            let tx_data_response_receiver_clone = tx_data_response_receiver.clone();
-            let message_sender_clone = message_sender.clone();
-
-            tokio::spawn(async move {
-                let responder = Responder::from_authority_kp(
-                    &authority_public_key.into_bytes(),
-                    &authority_secret_key.into_bytes(),
-                    std::time::Duration::from_secs(cert_validity_sec),
-                )
-                .unwrap();
-                let (mut receiver, mut sender) =
-                    Connection::new(stream, HandshakeRole::Responder(responder))
-                        .await
-                        .unwrap();
-                let _ = SetupConnectionHandler::setup(&mut receiver, &mut sender, address)
-                    .await
-                    .unwrap();
-
-                tokio::spawn(send_client_prevhash(
-                    sender.clone(),
-                    prev_hash_receiver_clone,
-                ));
-                tokio::spawn(send_client_template(
-                    sender.clone(),
-                    template_receiver_clone,
-                ));
-                tokio::spawn(send_client_tx_data_response(
-                    sender.clone(),
-                    tx_data_response_receiver_clone,
-                ));
-
-                while let Ok(msg) = receiver.recv().await {
-                    println!("message: {:?}", msg);
-                    let _ = message_sender_clone.send(msg).await;
-                }
-            });
-        }
+        listen_for_connections(
+            network_config,
+            prev_hash_receiver,
+            template_receiver,
+            tx_data_response_receiver,
+            message_sender,
+        )
+        .await;
+        error!("Network listener task finished unexpectedly.");
     });
 
     let local_set = LocalSet::new();
+    info!("Running Provider initialization and loop within LocalSet.");
 
     local_set
-        .run_until(start_provider(
-            prev_hash_sender,
-            template_sender,
-            tx_data_response_sender,
-            message_receiver,
-            sv2feedelta,
-            sv2interval,
-            socket_path,
-        ))
-        .await;
-}
-
-async fn send_client_prevhash(
-    sender: Sender<EitherFrame>,
-    prev_hash_receiver: Receiver<EitherFrame>,
-) {
-    info!("Prevhash client setup");
-    while let Ok(msg) = prev_hash_receiver.recv().await {
-        _ = sender.send(msg).await;
-    }
-}
-
-async fn send_client_template(
-    sender: Sender<EitherFrame>,
-    template_receiver: Receiver<EitherFrame>,
-) {
-    info!("Template client setup");
-    while let Ok(msg) = template_receiver.recv().await {
-        _ = sender.send(msg).await;
-    }
-}
-
-async fn send_client_tx_data_response(
-    sender: Sender<EitherFrame>,
-    tx_data_response_receiver: Receiver<EitherFrame>,
-) {
-    info!("Transaction data client setup");
-    while let Ok(msg) = tx_data_response_receiver.recv().await {
-        _ = sender.send(msg).await;
-    }
-}
-
-fn message_from_frame(frame: &mut EitherFrame) -> (u8, AnyMessage<'static>) {
-    match frame {
-        Frame::Sv2(frame) => {
-            if let Some(header) = frame.get_header() {
-                let message_type = header.msg_type();
-                let mut payload = frame.payload().to_vec();
-                let message: Result<AnyMessage<'_>, _> =
-                    (message_type, payload.as_mut_slice()).try_into();
-                match message {
-                    Ok(message) => {
-                        let message = into_static(message);
-                        (message_type, message)
-                    }
-                    _ => {
-                        println!("Received frame with invalid payload or message type: {frame:?}");
-                        panic!();
-                    }
+        .run_until(async move {
+            info!("Attempting to initialize Provider...");
+            match Provider::new(
+                prev_hash_sender,
+                template_sender,
+                tx_data_response_sender,
+                message_receiver,
+                config.sv2feedelta,
+                config.sv2interval,
+                config.socket_path, // Pass the RPC socket path
+            )
+            .await
+            {
+                Ok(provider) => {
+                    info!("Provider initialized successfully. Starting run loop.");
+                    provider.run().await; // Run the provider's main loop
+                    info!("Provider run loop finished.");
                 }
-            } else {
-                println!("Received frame with invalid header: {frame:?}");
-                panic!();
+                // Handle specific RpcClientError variants for better logging
+                Err(RpcClientError::Connection(e)) => {
+                    error!(
+                        "Provider initialization failed: Could not connect to RPC socket: {}",
+                        e
+                    );
+                }
+                Err(RpcClientError::Capnp(e)) => {
+                    error!(
+                        "Provider initialization failed: Cap'n Proto RPC error: {}",
+                        e
+                    );
+                }
+                Err(e) => {
+                    // Catch-all for other RpcClientError variants
+                    error!("Provider initialization failed");
+                }
             }
+            // If initialization fails, the application might effectively stop here.
+            // Consider more robust shutdown logic if needed.
+            error!("Provider task finished or failed to initialize.");
+        })
+        .await;
+
+    info!("Template Provider LocalSet finished execution.");
+}
+
+async fn listen_for_connections(
+    config: Config,
+    prev_hash_receiver: Receiver<EitherFrame>,
+    template_receiver: Receiver<EitherFrame>,
+    tx_data_response_receiver: Receiver<EitherFrame>,
+    message_sender: Sender<EitherFrame>,
+) {
+    let bind_addr = format!("{}:{}", config.sv2bind, config.sv2port);
+    let listener = match TcpListener::bind(&bind_addr).await {
+        Ok(l) => {
+            info!("SV2 Listener started on: {}", bind_addr);
+            l
         }
-        Frame::HandShake(f) => {
-            println!("Received unexpected handshake frame: {f:?}");
-            panic!();
+        Err(e) => {
+            error!("Failed to bind TCP listener to {}: {}", bind_addr, e);
+            return;
+        }
+    };
+
+    loop {
+        match listener.accept().await {
+            Ok((stream, address)) => {
+                info!("Accepted SV2 connection from: {}", address);
+                let conn_prev_hash_receiver = prev_hash_receiver.clone();
+                let conn_template_receiver = template_receiver.clone();
+                let conn_tx_data_receiver = tx_data_response_receiver.clone();
+                let conn_message_sender = message_sender.clone();
+                let conn_config = config.clone();
+
+                tokio::spawn(async move {
+                    info!("Spawning connection handler for {}", address);
+                    // Use a more specific error type if available from handle_connection
+                    if let Err(e) = handle_connection(
+                        conn_config,
+                        stream,
+                        address,
+                        conn_prev_hash_receiver,
+                        conn_template_receiver,
+                        conn_tx_data_receiver,
+                        conn_message_sender,
+                    )
+                    .await
+                    {
+                        error!("Error handling connection from {}: {}", address, e);
+                    } else {
+                        info!("Connection handler finished gracefully for {}", address);
+                    }
+                });
+            }
+            Err(e) => {
+                error!("Error accepting connection: {}", e);
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
         }
     }
 }
 
-fn into_static(m: AnyMessage<'_>) -> AnyMessage<'static> {
-    match m {
-        AnyMessage::Mining(m) => AnyMessage::Mining(m.into_static()),
-        AnyMessage::Common(m) => match m {
-            CommonMessages::ChannelEndpointChanged(m) => {
-                AnyMessage::Common(CommonMessages::ChannelEndpointChanged(m.into_static()))
+type ConnectionHandlerError = Box<dyn std::error::Error + Send + Sync>;
+
+async fn handle_connection(
+    config: Config,
+    stream: tokio::net::TcpStream,
+    address: std::net::SocketAddr,
+    prev_hash_receiver: Receiver<EitherFrame>,
+    template_receiver: Receiver<EitherFrame>,
+    tx_data_response_receiver: Receiver<EitherFrame>,
+    message_sender: Sender<EitherFrame>,
+) -> Result<(), ConnectionHandlerError> {
+    let responder = Responder::from_authority_kp(
+        &config.authority_public_key.into_bytes(),
+        &config.authority_secret_key.into_bytes(),
+        std::time::Duration::from_secs(config.cert_validity_sec),
+    )
+    .unwrap();
+    let (mut receiver, mut sender) = Connection::new(stream, HandshakeRole::Responder(responder))
+        .await
+        .unwrap();
+
+    _ = SetupConnectionHandler::setup(&mut receiver, &mut sender, address)
+        .await
+        .unwrap();
+
+    info!("SV2 SetupConnection successful with {}", address);
+    tokio::spawn(forward_messages(
+        sender.clone(),
+        prev_hash_receiver,
+        "PrevHash",
+    ));
+    tokio::spawn(forward_messages(
+        sender.clone(),
+        template_receiver,
+        "Template",
+    ));
+    tokio::spawn(forward_messages(
+        sender.clone(),
+        tx_data_response_receiver,
+        "TxDataResponse",
+    ));
+
+    loop {
+        match receiver.recv().await {
+            Ok(msg) => {
+                if message_sender.send(msg).await.is_err() {
+                    error!("Failed to forward message to Provider; channel closed. Closing connection handler for {}.", address);
+                    break;
+                }
             }
-            CommonMessages::SetupConnection(m) => {
-                AnyMessage::Common(CommonMessages::SetupConnection(m.into_static()))
+            Err(e) => {
+                info!("Connection closed by peer {}", address);
+                return Err(e.into());
             }
-            CommonMessages::SetupConnectionError(m) => {
-                AnyMessage::Common(CommonMessages::SetupConnectionError(m.into_static()))
-            }
-            CommonMessages::SetupConnectionSuccess(m) => {
-                AnyMessage::Common(CommonMessages::SetupConnectionSuccess(m.into_static()))
-            }
-            CommonMessages::Reconnect(m) => {
-                AnyMessage::Common(CommonMessages::Reconnect(m.into_static()))
-            }
-        },
-        AnyMessage::JobDeclaration(m) => match m {
-            AllocateMiningJobToken(m) => {
-                AnyMessage::JobDeclaration(AllocateMiningJobToken(m.into_static()))
-            }
-            AllocateMiningJobTokenSuccess(m) => {
-                AnyMessage::JobDeclaration(AllocateMiningJobTokenSuccess(m.into_static()))
-            }
-            DeclareMiningJob(m) => AnyMessage::JobDeclaration(DeclareMiningJob(m.into_static())),
-            DeclareMiningJobError(m) => {
-                AnyMessage::JobDeclaration(DeclareMiningJobError(m.into_static()))
-            }
-            DeclareMiningJobSuccess(m) => {
-                AnyMessage::JobDeclaration(DeclareMiningJobSuccess(m.into_static()))
-            }
-            IdentifyTransactions(m) => {
-                AnyMessage::JobDeclaration(IdentifyTransactions(m.into_static()))
-            }
-            IdentifyTransactionsSuccess(m) => {
-                AnyMessage::JobDeclaration(IdentifyTransactionsSuccess(m.into_static()))
-            }
-            ProvideMissingTransactions(m) => {
-                AnyMessage::JobDeclaration(ProvideMissingTransactions(m.into_static()))
-            }
-            ProvideMissingTransactionsSuccess(m) => {
-                AnyMessage::JobDeclaration(ProvideMissingTransactionsSuccess(m.into_static()))
-            }
-            PushSolution(m) => AnyMessage::JobDeclaration(PushSolution(m.into_static())),
-        },
-        AnyMessage::TemplateDistribution(m) => match m {
-            CoinbaseOutputConstraints(m) => {
-                AnyMessage::TemplateDistribution(CoinbaseOutputConstraints(m.into_static()))
-            }
-            TemplateDistribution::NewTemplate(m) => {
-                AnyMessage::TemplateDistribution(TemplateDistribution::NewTemplate(m.into_static()))
-            }
-            TemplateDistribution::RequestTransactionData(m) => AnyMessage::TemplateDistribution(
-                TemplateDistribution::RequestTransactionData(m.into_static()),
-            ),
-            TemplateDistribution::RequestTransactionDataError(m) => {
-                AnyMessage::TemplateDistribution(TemplateDistribution::RequestTransactionDataError(
-                    m.into_static(),
-                ))
-            }
-            TemplateDistribution::RequestTransactionDataSuccess(m) => {
-                AnyMessage::TemplateDistribution(
-                    TemplateDistribution::RequestTransactionDataSuccess(m.into_static()),
-                )
-            }
-            TemplateDistribution::SetNewPrevHash(m) => AnyMessage::TemplateDistribution(
-                TemplateDistribution::SetNewPrevHash(m.into_static()),
-            ),
-            TemplateDistribution::SubmitSolution(m) => AnyMessage::TemplateDistribution(
-                TemplateDistribution::SubmitSolution(m.into_static()),
-            ),
-        },
+        }
     }
+    Ok(())
+}
+
+async fn forward_messages(
+    sender: Sender<EitherFrame>,
+    receiver: Receiver<EitherFrame>,
+    message_type_name: &'static str,
+) {
+    debug!(
+        "Starting forwarder task for {} messages.",
+        message_type_name
+    );
+    while let Ok(msg) = receiver.recv().await {
+        if sender.send(msg).await.is_err() {
+            debug!(
+                "Failed to forward {} message; connection likely closed.",
+                message_type_name
+            );
+            break;
+        }
+    }
+    debug!(
+        "Stopping forwarder task for {} messages (receiver closed or send failed).",
+        message_type_name
+    );
 }
