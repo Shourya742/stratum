@@ -10,7 +10,7 @@ members = [
     "translator",
     "jd-client",
     "jd-server"
-]
+, "template-provider-role"]
 
 [profile.dev]
 # Required by super_safe_lock
