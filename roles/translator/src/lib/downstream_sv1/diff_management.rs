@@ -130,6 +130,7 @@ impl Downstream {
             let message = Self::get_set_difficulty(new_target.to_vec())?;
             // send mining.set_difficulty to miner
             Downstream::send_message_downstream(self_.clone(), message).await?;
+
             let update_target_msg = SetDownstreamTarget {
                 channel_id,
                 new_target: new_target.into(),

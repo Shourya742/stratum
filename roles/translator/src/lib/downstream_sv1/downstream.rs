@@ -43,7 +43,7 @@ use futures::select;
 use tokio_util::codec::{FramedRead, LinesCodec};
 
 use std::{collections::VecDeque, net::SocketAddr, sync::Arc};
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 use v1::{client_to_server::Submit, json_rpc, server_to_client, utils::HexU32Be, IsServer};
 
 /// The maximum allowed length for a single line (JSON-RPC message) received from an SV1 client.
@@ -80,41 +80,41 @@ pub struct Downstream {
     pub(super) difficulty_mgmt: DownstreamDifficultyConfig,
     /// Configuration settings for the upstream channel's difficulty management.
     pub(super) upstream_difficulty_config: Arc<Mutex<UpstreamDifficultyConfig>>,
-    pub(super) recent_notifies: VecDeque<server_to_client::Notify<'static>>,
+    pub(super) active_jobs: VecDeque<server_to_client::Notify<'static>>,
 }
 
 impl Downstream {
     // not huge fan of test specific code in codebase.
-    // #[cfg(test)]
-    // pub fn new(
-    //     connection_id: u32,
-    //     authorized_names: Vec<String>,
-    //     extranonce1: Vec<u8>,
-    //     version_rolling_mask: Option<HexU32Be>,
-    //     version_rolling_min_bit: Option<HexU32Be>,
-    //     tx_sv1_bridge: Sender<DownstreamMessages>,
-    //     tx_outgoing: Sender<json_rpc::Message>,
-    //     first_job_received: bool,
-    //     extranonce2_len: usize,
-    //     difficulty_mgmt: DownstreamDifficultyConfig,
-    //     upstream_difficulty_config: Arc<Mutex<UpstreamDifficultyConfig>>,
-    //     last_job_id: String,
-    // ) -> Self {
-    //     Downstream {
-    //         connection_id,
-    //         authorized_names,
-    //         extranonce1,
-    //         version_rolling_mask,
-    //         version_rolling_min_bit,
-    //         tx_sv1_bridge,
-    //         tx_outgoing,
-    //         first_job_received,
-    //         extranonce2_len,
-    //         difficulty_mgmt,
-    //         upstream_difficulty_config,
-    //         recent_notifies: VecDeque::with_capacity(2)
-    //     }
-    // }
+    #[cfg(test)]
+    pub fn new(
+        connection_id: u32,
+        authorized_names: Vec<String>,
+        extranonce1: Vec<u8>,
+        version_rolling_mask: Option<HexU32Be>,
+        version_rolling_min_bit: Option<HexU32Be>,
+        tx_sv1_bridge: Sender<DownstreamMessages>,
+        tx_outgoing: Sender<json_rpc::Message>,
+        first_job_received: bool,
+        extranonce2_len: usize,
+        difficulty_mgmt: DownstreamDifficultyConfig,
+        upstream_difficulty_config: Arc<Mutex<UpstreamDifficultyConfig>>,
+        last_job_id: String,
+    ) -> Self {
+        Downstream {
+            connection_id,
+            authorized_names,
+            extranonce1,
+            version_rolling_mask,
+            version_rolling_min_bit,
+            tx_sv1_bridge,
+            tx_outgoing,
+            first_job_received,
+            extranonce2_len,
+            difficulty_mgmt,
+            upstream_difficulty_config,
+            active_jobs: VecDeque::with_capacity(2),
+        }
+    }
     /// Instantiates and manages a new handler for a single downstream SV1 client connection.
     ///
     /// This is the primary function called for each new incoming TCP stream from a miner.
@@ -144,9 +144,9 @@ impl Downstream {
         let (socket_reader, mut socket_writer) = stream.into_split();
         let (tx_outgoing, receiver_outgoing) = bounded(10);
 
-        let mut recent_notifies = VecDeque::with_capacity(2);
+        let mut active_jobs = VecDeque::with_capacity(1);
         if let Some(notify) = last_notify.clone() {
-            recent_notifies.push_back(notify);
+            active_jobs.push_back(notify);
         }
 
         let downstream = Arc::new(Mutex::new(Downstream {
@@ -161,7 +161,7 @@ impl Downstream {
             extranonce2_len,
             difficulty_mgmt: difficulty_config,
             upstream_difficulty_config,
-            recent_notifies: recent_notifies.clone(),
+            active_jobs: active_jobs.clone(),
         }));
         let self_ = downstream.clone();
 
@@ -293,6 +293,8 @@ impl Downstream {
             let timeout_timer = std::time::Instant::now();
             let mut first_sent = false;
             loop {
+                let mask = self_.safe_lock(|d| d.version_rolling_mask.clone()).unwrap();
+
                 let is_a = match downstream.safe_lock(|d| !d.authorized_names.is_empty()) {
                     Ok(is_a) => is_a,
                     Err(_e) => {
@@ -300,7 +302,7 @@ impl Downstream {
                         break;
                     }
                 };
-                if is_a && !first_sent && last_notify.is_some() {
+                if is_a && !first_sent && !active_jobs.is_empty() {
                     let target = handle_result!(
                         tx_status_notify,
                         Self::hash_rate_to_target(downstream.clone())
@@ -318,7 +320,18 @@ impl Downstream {
                         Downstream::send_message_downstream(downstream.clone(), message).await
                     );
 
-                    let sv1_mining_notify_msg = last_notify.clone().unwrap();
+                    let mut sv1_mining_notify_msg = match active_jobs.back().cloned() {
+                        Some(sv1_mining_notify_msg) => sv1_mining_notify_msg,
+                        None => {
+                            error!("sv1_mining_notify_msg is None");
+                            break;
+                        }
+                    };
+
+                    if let Some(mask) = mask {
+                        sv1_mining_notify_msg.version =
+                            HexU32Be(sv1_mining_notify_msg.version.0 & !mask.0);
+                    }
 
                     let message: json_rpc::Message = sv1_mining_notify_msg.into();
                     handle_result!(
@@ -332,7 +345,7 @@ impl Downstream {
                         break;
                     }
                     first_sent = true;
-                } else if is_a {
+                } else if is_a && !active_jobs.is_empty() {
                     // if hashrate has changed, update difficulty management, and send new
                     // mining.set_difficulty
                     select! {
@@ -340,7 +353,29 @@ impl Downstream {
                             // if hashrate has changed, update difficulty management, and send new mining.set_difficulty
                             handle_result!(tx_status_notify, Self::try_update_difficulty_settings(downstream.clone()).await);
 
-                            let sv1_mining_notify_msg = handle_result!(tx_status_notify, res);
+                            let mut sv1_mining_notify_msg = handle_result!(tx_status_notify, res);
+
+                            if downstream.safe_lock(|d| { d.active_jobs.push_back(sv1_mining_notify_msg.clone());
+                                debug!(
+                                    "Downstream {}: Added job_id {} to active_jobs. Current jobs: {:?}",
+                                    connection_id,
+                                    sv1_mining_notify_msg.job_id,
+                                    d.active_jobs.iter().map(|n| &n.job_id).collect::<Vec<_>>()
+                                );
+                                if d.active_jobs.len() > 2 {
+                                    if let Some(removed) = d.active_jobs.pop_front() {
+                                        debug!("Downstream {}: Removed oldest job_id {}", connection_id, removed.job_id);
+                                    }
+                                }
+                             }).is_err() {
+                                error!("Translator Downstream Mutex Poisoned");
+                                break;
+                             }
+
+                            if let Some(mask) = mask {
+                                sv1_mining_notify_msg.version = HexU32Be(sv1_mining_notify_msg.version.0 & !mask.0);
+                            }
+
                             let message: json_rpc::Message = sv1_mining_notify_msg.clone().into();
 
                             handle_result!(tx_status_notify, Downstream::send_message_downstream(downstream.clone(), message).await);

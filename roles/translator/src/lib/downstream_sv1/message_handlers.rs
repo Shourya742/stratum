@@ -123,7 +123,7 @@ impl IsServer<'static> for Downstream {
             return false;
         }
 
-        if self.recent_notifies.is_empty() {
+        if self.active_jobs.is_empty() {
             warn!("Share rejected: No recent notify messages available");
             return false;
         }
@@ -154,7 +154,7 @@ impl IsServer<'static> for Downstream {
 
         let is_valid = is_valid_share(
             request,
-            &self.recent_notifies,
+            &self.active_jobs,
             current_difficulty,
             self.extranonce1.clone(),
             self.version_rolling_mask.clone(),

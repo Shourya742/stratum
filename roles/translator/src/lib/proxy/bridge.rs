@@ -38,7 +38,7 @@ use roles_logic_sv2::{
     utils::{GroupId, Mutex},
     Error as RolesLogicError,
 };
-use std::sync::Arc;
+use std::{collections::VecDeque, sync::Arc};
 use tokio::{sync::broadcast, task::AbortHandle};
 use tracing::{debug, error, info, warn};
 use v1::{client_to_server::Submit, server_to_client, utils::HexU32Be};
@@ -90,7 +90,7 @@ pub struct Bridge {
     /// This target is derived from the upstream's requirements but may be adjusted locally.
     target: Arc<Mutex<Vec<u8>>>,
     /// The job ID of the last sent `mining.notify` message.
-    last_job_id: u32,
+    valid_job_ids: VecDeque<u32>,
     task_collector: Arc<Mutex<Vec<(AbortHandle, String)>>>,
 }
 
@@ -138,7 +138,7 @@ impl Bridge {
             future_jobs: vec![],
             last_p_hash: None,
             target,
-            last_job_id: 0,
+            valid_job_ids: VecDeque::with_capacity(2),
             task_collector,
         }))
     }
@@ -273,7 +273,16 @@ impl Bridge {
         })?;
         let upstream_target: [u8; 32] = target_mutex.safe_lock(|t| t.clone())?.try_into()?;
         let mut upstream_target: Target = upstream_target.into();
-        self_.safe_lock(|s| s.channel_factory.set_target(&mut upstream_target))?;
+        _ = self_.safe_lock(|s| {
+            if let Ok(job_id) = share.share.job_id.parse::<u32>() {
+                if !s.valid_job_ids.contains(&job_id) {
+                    info!("Share rejected: job_id {} not in last two jobs", job_id);
+                    return Err(roles_logic_sv2::Error::ShareDoNotMatchAnyJob);
+                }
+            }
+            s.channel_factory.set_target(&mut upstream_target);
+            Ok(())
+        })?;
 
         let sv2_submit = self_.safe_lock(|s| {
             s.translate_submit(share.channel_id, share.share, share.version_rolling_mask)
@@ -403,7 +412,10 @@ impl Bridge {
                 match_a_future_job = true;
                 self_.safe_lock(|s| {
                     s.last_notify = Some(notify);
-                    s.last_job_id = j_id;
+                    s.valid_job_ids.push_back(j_id);
+                    if s.valid_job_ids.len() > 2 {
+                        s.valid_job_ids.pop_front();
+                    }
                 })?;
                 break;
             }
@@ -506,7 +518,10 @@ impl Bridge {
             tx_sv1_notify.send(notify.clone())?;
             self_.safe_lock(|s| {
                 s.last_notify = Some(notify);
-                s.last_job_id = j_id;
+                s.valid_job_ids.push_back(j_id);
+                if s.valid_job_ids.len() > 2 {
+                    s.valid_job_ids.pop_front();
+                }
             })?;
             Ok(())
         }
