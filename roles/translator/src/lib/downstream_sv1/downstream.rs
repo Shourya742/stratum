@@ -25,8 +25,17 @@ use crate::{
     status,
 };
 use async_channel::{bounded, Receiver, Sender};
+use binary_sv2::{Sv2DataType, U256};
 use error_handling::handle_result;
 use futures::{FutureExt, StreamExt};
+use std::ops::{Div, Mul};
+use stratum_common::bitcoin::{
+    self,
+    block::{Header, Version},
+    hashes::{sha256d, Hash},
+    hex::DisplayHex,
+    BlockHash, CompactTarget,
+};
 use tokio::{
     io::{AsyncWriteExt, BufReader},
     net::{TcpListener, TcpStream},
@@ -38,15 +47,15 @@ use super::{kill, DownstreamMessages, SubmitShareWithChannelId, SUBSCRIBE_TIMEOU
 
 use roles_logic_sv2::{
     common_properties::{IsDownstream, IsMiningDownstream},
-    utils::Mutex,
+    utils::{from_u128_to_u256, u256_to_block_hash, Mutex},
 };
 
 use crate::error::Error;
 use futures::select;
 use tokio_util::codec::{FramedRead, LinesCodec};
 
-use std::{net::SocketAddr, sync::Arc};
-use tracing::{debug, info, warn};
+use std::{collections::VecDeque, net::SocketAddr, sync::Arc};
+use tracing::{debug, error, info, warn};
 use v1::{
     client_to_server::{self, Submit},
     json_rpc, server_to_client,
@@ -88,39 +97,41 @@ pub struct Downstream {
     pub(super) difficulty_mgmt: DownstreamDifficultyConfig,
     /// Configuration settings for the upstream channel's difficulty management.
     pub(super) upstream_difficulty_config: Arc<Mutex<UpstreamDifficultyConfig>>,
+    pub(super) recent_notifies: VecDeque<server_to_client::Notify<'static>>,
 }
 
 impl Downstream {
     // not huge fan of test specific code in codebase.
-    #[cfg(test)]
-    pub fn new(
-        connection_id: u32,
-        authorized_names: Vec<String>,
-        extranonce1: Vec<u8>,
-        version_rolling_mask: Option<HexU32Be>,
-        version_rolling_min_bit: Option<HexU32Be>,
-        tx_sv1_bridge: Sender<DownstreamMessages>,
-        tx_outgoing: Sender<json_rpc::Message>,
-        first_job_received: bool,
-        extranonce2_len: usize,
-        difficulty_mgmt: DownstreamDifficultyConfig,
-        upstream_difficulty_config: Arc<Mutex<UpstreamDifficultyConfig>>,
-        last_job_id: String,
-    ) -> Self {
-        Downstream {
-            connection_id,
-            authorized_names,
-            extranonce1,
-            version_rolling_mask,
-            version_rolling_min_bit,
-            tx_sv1_bridge,
-            tx_outgoing,
-            first_job_received,
-            extranonce2_len,
-            difficulty_mgmt,
-            upstream_difficulty_config,
-        }
-    }
+    // #[cfg(test)]
+    // pub fn new(
+    //     connection_id: u32,
+    //     authorized_names: Vec<String>,
+    //     extranonce1: Vec<u8>,
+    //     version_rolling_mask: Option<HexU32Be>,
+    //     version_rolling_min_bit: Option<HexU32Be>,
+    //     tx_sv1_bridge: Sender<DownstreamMessages>,
+    //     tx_outgoing: Sender<json_rpc::Message>,
+    //     first_job_received: bool,
+    //     extranonce2_len: usize,
+    //     difficulty_mgmt: DownstreamDifficultyConfig,
+    //     upstream_difficulty_config: Arc<Mutex<UpstreamDifficultyConfig>>,
+    //     last_job_id: String,
+    // ) -> Self {
+    //     Downstream {
+    //         connection_id,
+    //         authorized_names,
+    //         extranonce1,
+    //         version_rolling_mask,
+    //         version_rolling_min_bit,
+    //         tx_sv1_bridge,
+    //         tx_outgoing,
+    //         first_job_received,
+    //         extranonce2_len,
+    //         difficulty_mgmt,
+    //         upstream_difficulty_config,
+    //         recent_notifies: VecDeque::with_capacity(2)
+    //     }
+    // }
     /// Instantiates and manages a new handler for a single downstream SV1 client connection.
     ///
     /// This is the primary function called for each new incoming TCP stream from a miner.
@@ -150,11 +161,15 @@ impl Downstream {
         let (socket_reader, mut socket_writer) = stream.into_split();
         let (tx_outgoing, receiver_outgoing) = bounded(10);
 
+        let mut recent_notifies = VecDeque::with_capacity(2);
+        if let Some(notify) = last_notify.clone() {
+            recent_notifies.push_back(notify);
+        }
+
         let downstream = Arc::new(Mutex::new(Downstream {
             connection_id,
             authorized_names: vec![],
             extranonce1,
-            //extranonce1: extranonce1.to_vec(),
             version_rolling_mask: None,
             version_rolling_min_bit: None,
             tx_sv1_bridge,
@@ -163,6 +178,7 @@ impl Downstream {
             extranonce2_len,
             difficulty_mgmt: difficulty_config,
             upstream_difficulty_config,
+            recent_notifies: recent_notifies.clone(),
         }));
         let self_ = downstream.clone();
 
@@ -604,24 +620,73 @@ impl IsServer<'static> for Downstream {
     /// [`SubmitShareWithChannelId`], and sends it to the Bridge for
     /// translation to SV2 and forwarding upstream if it meets the upstream target.
     fn handle_submit(&self, request: &client_to_server::Submit<'static>) -> bool {
-        info!("Down: Submitting Share {:?}", request);
-        debug!("Down: Handling mining.submit: {:?}", &request);
+        info!("Downstream: Received mining.submit {:?}", request);
 
-        // TODO: Check if receiving valid shares by adding diff field to Downstream
+        if !self.first_job_received {
+            warn!("Share rejected: No job received yet from upstream");
+            return false;
+        }
 
-        let to_send = SubmitShareWithChannelId {
-            channel_id: self.connection_id,
-            share: request.clone(),
-            extranonce: self.extranonce1.clone(),
-            extranonce2_len: self.extranonce2_len,
-            version_rolling_mask: self.version_rolling_mask.clone(),
+        if self.recent_notifies.is_empty() {
+            warn!("Share rejected: No recent notify messages available");
+            return false;
+        }
+
+        let target_result = roles_logic_sv2::utils::hash_rate_to_target(
+            self.difficulty_mgmt.min_individual_miner_hashrate.into(),
+            self.difficulty_mgmt.shares_per_minute.into(),
+        );
+
+        let current_target = match target_result {
+            Ok(t) => t.to_vec(),
+            Err(e) => {
+                error!("Failed to compute target from hash rate: {:?}", e);
+                return false;
+            }
         };
 
-        self.tx_sv1_bridge
-            .try_send(DownstreamMessages::SubmitShares(to_send))
-            .unwrap();
+        let current_difficulty = match Downstream::difficulty_from_target(current_target) {
+            Ok(d) => d as f32,
+            Err(e) => {
+                error!(
+                    "Failed to derive difficulty from target, {:?}",
+                    e.to_string()
+                );
+                return false;
+            }
+        };
 
-        true
+        let is_valid = is_valid_share(
+            request,
+            &self.recent_notifies,
+            current_difficulty,
+            self.extranonce1.clone(),
+            self.version_rolling_mask.clone(),
+        );
+
+        if is_valid {
+            let to_send = SubmitShareWithChannelId {
+                channel_id: self.connection_id,
+                share: request.clone(),
+                extranonce: self.extranonce1.clone(),
+                extranonce2_len: self.extranonce2_len,
+                version_rolling_mask: self.version_rolling_mask.clone(),
+            };
+
+            if let Err(e) = self
+                .tx_sv1_bridge
+                .try_send(DownstreamMessages::SubmitShares(to_send))
+            {
+                error!("Failed to send share to SV1 bridge: {:?}", e);
+                return false;
+            }
+
+            info!("Share accepted and forwarded to bridge");
+            true
+        } else {
+            warn!("Share rejected: Validation failed");
+            false
+        }
     }
 
     /// Indicates to the server that the client supports the mining.set_extranonce method.
@@ -691,6 +756,131 @@ impl IsDownstream for Downstream {
     ) -> roles_logic_sv2::common_properties::CommonDownstreamData {
         todo!()
     }
+}
+
+/// Validates a submitted mining share against recent jobs and target difficulty.
+fn is_valid_share(
+    submit: &client_to_server::Submit<'static>,
+    recent_jobs: &VecDeque<server_to_client::Notify<'static>>,
+    difficulty: f32,
+    extranonce1: Vec<u8>,
+    version_rolling_mask: Option<HexU32Be>,
+) -> bool {
+    let job = match recent_jobs.iter().find(|job| job.job_id == submit.job_id) {
+        Some(job) => job,
+        None => {
+            error!(
+                "Share rejected: No matching job ID ({}) found",
+                submit.job_id
+            );
+            return false;
+        }
+    };
+
+    let prev_hash_bytes: Vec<u8> = job.prev_hash.clone().into();
+    let prev_hash = match U256::from_vec_(prev_hash_bytes) {
+        Ok(p) => u256_to_block_hash(p),
+        Err(e) => {
+            error!("Failed to convert prev_hash to U256: {:?}", e);
+            return false;
+        }
+    };
+
+    let extranonce2 = submit.extra_nonce2.0.to_vec();
+    let extranonce: Vec<u8> = [extranonce1, extranonce2].concat();
+
+    let job_version = job.version.0;
+    let submit_version = submit
+        .version_bits
+        .clone()
+        .map(|v| v.0)
+        .unwrap_or(job_version);
+    let mask = version_rolling_mask.unwrap_or(HexU32Be(0x1FFFE000)).0;
+    let merged_version = (job_version & !mask) | (submit_version & mask);
+
+    let merkle_branch: Vec<Vec<u8>> = job.merkle_branch.iter().map(|b| b.0.to_vec()).collect();
+
+    let block_hash = compute_block_hash(
+        submit.nonce.0,
+        merged_version,
+        submit.time.0,
+        &extranonce,
+        job,
+        prev_hash,
+        merkle_branch,
+    );
+
+    let mut hash = block_hash;
+    hash.reverse();
+
+    let target = difficulty_to_target(difficulty);
+    info!("Computed hash:   {:?}", hash.as_hex());
+    info!("Current target:  {:?}", target.as_hex());
+
+    hash <= target
+}
+
+fn compute_block_hash(
+    nonce: u32,
+    version: u32,
+    ntime: u32,
+    extranonce: &[u8],
+    job: &server_to_client::Notify,
+    prev_hash: BlockHash,
+    merkle_path: Vec<Vec<u8>>,
+) -> [u8; 32] {
+    let mut coinbase = Vec::new();
+    coinbase.extend_from_slice(job.coin_base1.as_ref());
+    coinbase.extend_from_slice(extranonce);
+    coinbase.extend_from_slice(job.coin_base2.as_ref());
+
+    let coinbase_hash = sha256d::Hash::hash(&coinbase);
+    let mut merkle_root = coinbase_hash.to_byte_array();
+
+    for node in merkle_path {
+        let mut combined = Vec::with_capacity(64);
+        combined.extend_from_slice(&merkle_root);
+        combined.extend_from_slice(&node);
+        merkle_root = sha256d::Hash::hash(&combined).to_byte_array();
+    }
+
+    let header = Header {
+        version: Version::from_consensus(version.try_into().unwrap_or_else(|_| {
+            warn!("Invalid version cast, defaulting to 0");
+            0
+        })),
+        prev_blockhash: prev_hash,
+        merkle_root: bitcoin::TxMerkleNode::from_byte_array(merkle_root),
+        time: ntime,
+        bits: CompactTarget::from_consensus(job.bits.0),
+        nonce,
+    };
+
+    header.block_hash().to_raw_hash().to_byte_array()
+}
+
+pub fn difficulty_to_target(difficulty: f32) -> [u8; 32] {
+    let min_diff = 0.001;
+    let difficulty = difficulty.max(min_diff);
+    let scale_factor: u128 = 1_000_000;
+
+    let pdiff: [u8; 32] = [
+        0, 0, 0, 0, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+        255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    ];
+    let max_target = primitive_types::U256::from_big_endian(&pdiff);
+
+    let scaled_diff = difficulty * (scale_factor as f32);
+    if scaled_diff > u128::MAX as f32 {
+        error!("Scaled difficulty {} exceeds u128 maximum", scaled_diff);
+        return [0xff; 32]; // Return max target
+    }
+
+    let diff = from_u128_to_u256(scaled_diff as u128);
+    let scale = from_u128_to_u256(scale_factor);
+
+    let target = max_target.mul(scale).div(diff);
+    target.to_big_endian()
 }
 
 #[cfg(test)]
