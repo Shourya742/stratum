@@ -26,7 +26,7 @@ use crate::{
     utils::proxy_extranonce1_len,
 };
 
-#[derive(PartialEq, Hash, Eq, Clone)]
+#[derive(PartialEq, Hash, Eq, Clone, Debug)]
 pub struct Sv1ChannelId(u32);
 
 /// Sv1 channel representation
@@ -63,6 +63,7 @@ impl Sv1Channel {
     }
 }
 
+#[derive(Debug)]
 pub struct UpstreamChannelManager {
     pub channel_ids: HashSet<u32>,
     pub downstream_managers: HashMap<u32, ChannelManager>,
@@ -87,6 +88,7 @@ impl UpstreamChannelManager {
 }
 
 // Just struct this for non-aggregation case first.
+#[derive(Debug)]
 pub struct ChannelManager {
     // Channel extranonce distributor.
     pub extended_extranonce_factory: ExtendedExtranonce,

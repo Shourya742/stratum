@@ -17,6 +17,8 @@
 //! - Broadcasting translated SV1 notifications to connected downstream miners.
 //! - Managing channel state and difficulty related to job translation.
 //! - Handling new downstream SV1 connections.
+use crate::channel_manager::UpstreamChannelManager;
+
 use super::super::{
     downstream_sv1::{DownstreamMessages, SetDownstreamTarget, SubmitShareWithChannelId},
     error::{
@@ -79,19 +81,13 @@ pub struct Bridge {
     /// longer used.
     last_notify: Option<server_to_client::Notify<'static>>,
     pub(self) channel_factory: ProxyExtendedChannelFactory,
-    /// Stores `NewExtendedMiningJob` messages received from the upstream with the `is_future` flag
-    /// set. These jobs are buffered until a corresponding `SetNewPrevHash` message is
-    /// received.
-    future_jobs: Vec<NewExtendedMiningJob<'static>>,
-    /// Stores the last received SV2 `SetNewPrevHash` message. Used in conjunction with
-    /// `future_jobs` to construct `mining.notify` messages.
-    last_p_hash: Option<SetNewPrevHash<'static>>,
     /// The mining target currently in use by the downstream miners connected to this bridge.
     /// This target is derived from the upstream's requirements but may be adjusted locally.
     target: Arc<Mutex<Vec<u8>>>,
     /// The job ID of the last sent `mining.notify` message.
     last_job_id: u32,
     task_collector: Arc<Mutex<Vec<(AbortHandle, String)>>>,
+    upstream_channel_manager: Arc<Mutex<UpstreamChannelManager>>,
 }
 
 impl Bridge {
@@ -112,6 +108,7 @@ impl Bridge {
         target: Arc<Mutex<Vec<u8>>>,
         up_id: u32,
         task_collector: Arc<Mutex<Vec<(AbortHandle, String)>>>,
+        upstream_channel_manager: Arc<Mutex<UpstreamChannelManager>>,
     ) -> Arc<Mutex<Self>> {
         let ids = Arc::new(Mutex::new(GroupId::new()));
         let share_per_min = 1.0;
@@ -135,11 +132,10 @@ impl Bridge {
                 None,
                 up_id,
             ),
-            future_jobs: vec![],
-            last_p_hash: None,
             target,
             last_job_id: 0,
             task_collector,
+            upstream_channel_manager,
         }))
     }
 
@@ -368,49 +364,49 @@ impl Bridge {
         sv2_set_new_prev_hash: SetNewPrevHash<'static>,
         tx_sv1_notify: broadcast::Sender<server_to_client::Notify<'static>>,
     ) -> Result<(), Error<'static>> {
-        while !crate::upstream_sv2::upstream::IS_NEW_JOB_HANDLED
-            .load(std::sync::atomic::Ordering::SeqCst)
-        {
-            tokio::task::yield_now().await;
-        }
-        self_.safe_lock(|s| s.last_p_hash = Some(sv2_set_new_prev_hash.clone()))?;
+        // The handle_new_prev_hash_ by bridge shouldn't be doing
+        // any channel management as its job is just to translate
+        // and do nothing else.
+        //
+        // We are fetching the current active job from corresponding
+        // upstream channel, channel manager and creating its notification.
 
-        let on_new_prev_hash_res = self_.safe_lock(|s| {
-            s.channel_factory
-                .on_new_prev_hash(sv2_set_new_prev_hash.clone())
+        // fetching the active job, for corresponding SetNewPrevHash message, which should already
+        // be populated in channel_manager.
+        let active_job = self_.safe_lock(|bridge| {
+            let value = bridge
+                .upstream_channel_manager
+                .safe_lock(|manager| {
+                    let downstream_channel_manager = manager
+                        .downstream_managers
+                        .get(&sv2_set_new_prev_hash.channel_id);
+                    if let Some(downstream_channel_manager) = downstream_channel_manager {
+                        return downstream_channel_manager.active_job.clone();
+                    }
+                    None
+                })
+                .unwrap();
+            value
         })?;
-        on_new_prev_hash_res?;
 
-        let mut future_jobs = self_.safe_lock(|s| {
-            let future_jobs = s.future_jobs.clone();
-            s.future_jobs = vec![];
-            future_jobs
-        })?;
+        if let Some(active_job) = active_job {
+            let job_id = active_job.job_id;
 
-        let mut match_a_future_job = false;
-        while let Some(job) = future_jobs.pop() {
-            if job.job_id == sv2_set_new_prev_hash.job_id {
-                let j_id = job.job_id;
-                // Create the mining.notify to be sent to the Downstream.
-                let notify = crate::proxy::next_mining_notify::create_notify(
-                    sv2_set_new_prev_hash.clone(),
-                    job,
-                    true,
-                );
+            // Sending the notify message to downstream.
+            let notify = crate::proxy::next_mining_notify::create_notify(
+                sv2_set_new_prev_hash.clone(),
+                active_job,
+                true,
+            );
 
-                // Get the sender to send the mining.notify to the Downstream
-                tx_sv1_notify.send(notify.clone())?;
-                match_a_future_job = true;
-                self_.safe_lock(|s| {
-                    s.last_notify = Some(notify);
-                    s.last_job_id = j_id;
-                })?;
-                break;
-            }
+            // Get the sender to send the mining.notify to the Downstream
+            tx_sv1_notify.send(notify.clone())?;
+            self_.safe_lock(|s| {
+                s.last_notify = Some(notify);
+                s.last_job_id = job_id;
+            })?;
         }
-        if !match_a_future_job {
-            debug!("No future jobs for {:?}", sv2_set_new_prev_hash);
-        }
+
         Ok(())
     }
 
@@ -472,44 +468,53 @@ impl Bridge {
         sv2_new_extended_mining_job: NewExtendedMiningJob<'static>,
         tx_sv1_notify: broadcast::Sender<server_to_client::Notify<'static>>,
     ) -> Result<(), Error<'static>> {
-        // convert to non segwit jobs so we dont have to depend if miner's support segwit or not
-        self_.safe_lock(|s| {
-            s.channel_factory
-                .on_new_extended_mining_job(sv2_new_extended_mining_job.as_static().clone())
-        })??;
+        // The handle_new_extended_mining_job_ by bridge shouldn't be doing
+        // any channel management as its job is just to translate
+        // and do nothing else.
+        //
+        // We are fetching the current previous block hash from corresponding
+        // upstream channel, channel manager and creating its notification.
 
-        // If future_job=true, this job is meant for a future SetNewPrevHash that the proxy
-        // has yet to receive. Insert this new job into the job_mapper .
         if sv2_new_extended_mining_job.is_future() {
-            self_.safe_lock(|s| s.future_jobs.push(sv2_new_extended_mining_job.clone()))?;
-            Ok(())
+            return Ok(());
+        }
 
-        // If future_job=false, this job is meant for the current SetNewPrevHash.
-        } else {
-            let last_p_hash_option = self_.safe_lock(|s| s.last_p_hash.clone())?;
+        // fetching the active job, for corresponding SetNewPrevHash message, which should already
+        // be populated in channel_manager.
+        let prev_block_hash = self_.safe_lock(|bridge| {
+            let value = bridge
+                .upstream_channel_manager
+                .safe_lock(|manager| {
+                    let downstream_channel_manager = manager
+                        .downstream_managers
+                        .get(&sv2_new_extended_mining_job.channel_id);
+                    if let Some(downstream_channel_manager) = downstream_channel_manager {
+                        return downstream_channel_manager.prev_block_hash.clone();
+                    }
+                    None
+                })
+                .unwrap();
+            value
+        })?;
 
-            // last_p_hash is an Option<SetNewPrevHash> so we need to map to the correct error type
-            // to be handled
-            let last_p_hash = last_p_hash_option.ok_or(Error::RolesSv2Logic(
-                RolesLogicError::JobIsNotFutureButPrevHashNotPresent,
-            ))?;
+        if let Some(prev_block_hash) = prev_block_hash {
+            let job_id = sv2_new_extended_mining_job.job_id;
 
-            let j_id = sv2_new_extended_mining_job.job_id;
-            // Create the mining.notify to be sent to the Downstream.
-            // clean_jobs must be false because it's not a NewPrevHash template
+            // Sending the notify message to downstream.
             let notify = crate::proxy::next_mining_notify::create_notify(
-                last_p_hash,
-                sv2_new_extended_mining_job.clone(),
-                false,
+                prev_block_hash,
+                sv2_new_extended_mining_job,
+                true,
             );
             // Get the sender to send the mining.notify to the Downstream
             tx_sv1_notify.send(notify.clone())?;
             self_.safe_lock(|s| {
                 s.last_notify = Some(notify);
-                s.last_job_id = j_id;
+                s.last_job_id = job_id;
             })?;
-            Ok(())
         }
+
+        Ok(())
     }
 
     /// Task handler that receives SV2 `NewExtendedMiningJob` messages from the upstream.

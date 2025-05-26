@@ -307,6 +307,7 @@ impl TranslatorSv2 {
                 target,
                 up_id,
                 task_collector_bridge,
+                upstream_channel_manager,
             );
             // Start the Bridge's main processing loop.
             proxy::Bridge::start(b.clone());
