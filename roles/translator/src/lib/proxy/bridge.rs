@@ -260,6 +260,21 @@ impl Bridge {
         self_: Arc<Mutex<Self>>,
         share: SubmitShareWithChannelId,
     ) -> ProxyResult<'static, ()> {
+        let _verdict = self_.safe_lock(|bridge| {
+            let verdict = bridge
+                .upstream_channel_manager
+                .safe_lock(|upstream_manager| {
+                    if let Some(downstream) = upstream_manager
+                        .downstream_managers
+                        .get_mut(&share.channel_id)
+                    {
+                        return downstream.on_submit_share(share.clone());
+                    }
+                    false
+                })
+                .unwrap();
+            verdict
+        })?;
         let (tx_sv2_submit_shares_ext, target_mutex, tx_status) = self_.safe_lock(|s| {
             (
                 s.tx_sv2_submit_shares_ext.clone(),
@@ -275,7 +290,7 @@ impl Bridge {
             s.translate_submit(share.channel_id, share.share, share.version_rolling_mask)
         })??;
         let res = self_
-            .safe_lock(|s| s.channel_factory.on_submit_shares_extended(sv2_submit))
+            .safe_lock(|s: &mut Bridge| s.channel_factory.on_submit_shares_extended(sv2_submit))
             .map_err(|_| PoisonLock);
 
         match res {

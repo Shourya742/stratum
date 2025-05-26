@@ -37,7 +37,7 @@ pub enum DownstreamMessages {
 
 /// wrapper around a `mining.submit` with extra channel informationfor the Bridge to
 /// process
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SubmitShareWithChannelId {
     pub channel_id: u32,
     pub share: Submit<'static>,
