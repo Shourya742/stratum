@@ -77,6 +77,13 @@ impl UpstreamChannelManager {
             upstream_difficulty: HashMap::new(),
         }
     }
+    
+    pub fn remove(&mut self, id: u32) {
+        self.channel_ids.remove(&id);
+        // todo: Improve this later
+        self.downstream_managers.remove(&id);
+        self.upstream_difficulty.remove(&id);
+    }
 }
 
 // Just struct this for non-aggregation case first.
