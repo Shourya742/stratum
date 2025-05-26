@@ -420,7 +420,7 @@ impl Upstream {
                                     ..prefix_len + m.extranonce_size as usize; // extranonce2
 
                                 _ = upstream_channel_manager_clone.safe_lock(|e| {
-                                    e.channel_ids.insert(m.channel_id.clone());
+                                    e.channel_ids.insert(m.channel_id);
                                     let downstream_channel_manager = ChannelManager::new(
                                         extranonce_prefix.clone(),
                                         prefix_len,
