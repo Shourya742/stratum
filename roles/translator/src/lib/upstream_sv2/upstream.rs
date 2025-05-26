@@ -480,9 +480,7 @@ impl Upstream {
                                 error!("Received Mining::CloseChannel msg from upstream!");
                                 _ = upstream_channel_manager_clone.safe_lock(|u| {
                                     // Todo improve this.
-                                    u.channel_ids.remove(&m.channel_id);
-                                    u.downstream_managers.remove(&m.channel_id);
-                                    u.upstream_difficulty.remove(&m.channel_id)
+                                    u.remove(m.channel_id);
                                 });
                                 handle_result!(tx_status, Err(NoUpstreamsConnected));
                             }
