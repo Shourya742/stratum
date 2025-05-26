@@ -21,18 +21,13 @@ use crate::channel_manager::UpstreamChannelManager;
 
 use super::super::{
     downstream_sv1::{DownstreamMessages, SetDownstreamTarget, SubmitShareWithChannelId},
-    error::{
-        Error::{self, PoisonLock},
-        ProxyResult,
-    },
+    error::{Error, ProxyResult},
     status,
 };
 use async_channel::{Receiver, Sender};
 use error_handling::handle_result;
 use roles_logic_sv2::{
-    channel_logic::channel_factory::{
-        ExtendedChannelKind, OnNewShare, ProxyExtendedChannelFactory, Share,
-    },
+    channel_logic::channel_factory::{ExtendedChannelKind, ProxyExtendedChannelFactory},
     mining_sv2::{
         ExtendedExtranonce, NewExtendedMiningJob, SetNewPrevHash, SubmitSharesExtended, Target,
     },
@@ -42,7 +37,7 @@ use roles_logic_sv2::{
 };
 use std::sync::Arc;
 use tokio::{sync::broadcast, task::AbortHandle};
-use tracing::{debug, error, info, warn};
+use tracing::debug;
 use v1::{client_to_server::Submit, server_to_client, utils::HexU32Be};
 
 /// Bridge between the SV2 `Upstream` and SV1 `Downstream` responsible for the following messaging
@@ -260,7 +255,7 @@ impl Bridge {
         self_: Arc<Mutex<Self>>,
         share: SubmitShareWithChannelId,
     ) -> ProxyResult<'static, ()> {
-        let _verdict = self_.safe_lock(|bridge| {
+        let verdict = self_.safe_lock(|bridge| {
             let verdict = bridge
                 .upstream_channel_manager
                 .safe_lock(|upstream_manager| {
@@ -275,56 +270,14 @@ impl Bridge {
                 .unwrap();
             verdict
         })?;
-        let (tx_sv2_submit_shares_ext, target_mutex, tx_status) = self_.safe_lock(|s| {
-            (
-                s.tx_sv2_submit_shares_ext.clone(),
-                s.target.clone(),
-                s.tx_status.clone(),
-            )
-        })?;
-        let upstream_target: [u8; 32] = target_mutex.safe_lock(|t| t.clone())?.try_into()?;
-        let mut upstream_target: Target = upstream_target.into();
-        self_.safe_lock(|s| s.channel_factory.set_target(&mut upstream_target))?;
+        let tx_sv2_submit_shares_ext = self_.safe_lock(|s| s.tx_sv2_submit_shares_ext.clone())?;
 
-        let sv2_submit = self_.safe_lock(|s| {
-            s.translate_submit(share.channel_id, share.share, share.version_rolling_mask)
-        })??;
-        let res = self_
-            .safe_lock(|s: &mut Bridge| s.channel_factory.on_submit_shares_extended(sv2_submit))
-            .map_err(|_| PoisonLock);
+        if verdict {
+            let sv2_submit = self_.safe_lock(|s| {
+                s.translate_submit(share.channel_id, share.share, share.version_rolling_mask)
+            })??;
 
-        match res {
-            Ok(Ok(OnNewShare::SendErrorDownstream(e))) => {
-                warn!(
-                    "Submit share error {:?}",
-                    std::str::from_utf8(&e.error_code.to_vec()[..])
-                );
-            }
-            Ok(Ok(OnNewShare::SendSubmitShareUpstream((share, _)))) => {
-                info!("SHARE MEETS UPSTREAM TARGET");
-                match share {
-                    Share::Extended(share) => {
-                        tx_sv2_submit_shares_ext.send(share).await?;
-                    }
-                    // We are in an extended channel shares are extended
-                    Share::Standard(_) => unreachable!(),
-                }
-            }
-            // We are in an extended channel this variant is group channle only
-            Ok(Ok(OnNewShare::RelaySubmitShareUpstream)) => unreachable!(),
-            Ok(Ok(OnNewShare::ShareMeetDownstreamTarget)) => {
-                debug!("SHARE MEETS DOWNSTREAM TARGET");
-            }
-            // Proxy do not have JD capabilities
-            Ok(Ok(OnNewShare::ShareMeetBitcoinTarget(..))) => unreachable!(),
-            Ok(Err(e)) => error!("Error: {:?}", e),
-            Err(e) => {
-                let _ = tx_status
-                    .send(status::Status {
-                        state: status::State::BridgeShutdown(e),
-                    })
-                    .await;
-            }
+            tx_sv2_submit_shares_ext.send(sv2_submit).await?;
         }
         Ok(())
     }
