@@ -11,6 +11,7 @@
 //! It relies on several sub-modules (`config`, `downstream_sv1`, `upstream_sv2`, `proxy`, `status`,
 //! etc.) for specialized functionalities.
 use async_channel::{bounded, unbounded};
+use channel_manager::UpstreamChannelManager;
 use futures::FutureExt;
 use rand::Rng;
 pub use roles_logic_sv2::utils::Mutex;
@@ -33,6 +34,7 @@ use config::TranslatorConfig;
 
 use crate::status::State;
 
+pub mod channel_manager;
 pub mod config;
 pub mod downstream_sv1;
 pub mod error;
@@ -215,6 +217,8 @@ impl TranslatorSv2 {
             proxy_config.upstream_port,
         );
 
+        let upstream_channel_manager = Arc::new(Mutex::new(UpstreamChannelManager::new()));
+
         // Shared difficulty configuration
         let diff_config = Arc::new(Mutex::new(proxy_config.upstream_difficulty_config.clone()));
         let task_collector_upstream = task_collector.clone();
@@ -264,7 +268,10 @@ impl TranslatorSv2 {
             }
 
             // Start the task to parse incoming messages from the Upstream.
-            if let Err(e) = upstream_sv2::Upstream::parse_incoming(upstream.clone()) {
+            if let Err(e) = upstream_sv2::Upstream::parse_incoming(
+                upstream.clone(),
+                upstream_channel_manager.clone(),
+            ) {
                 error!("failed to create sv2 parser: {}", e);
                 return;
             }
