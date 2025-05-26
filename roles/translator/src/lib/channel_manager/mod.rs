@@ -14,11 +14,19 @@
 /// once a downstream connects we gonna open a extended mining channel with the upstream.
 use std::collections::{HashMap, HashSet};
 
+use binary_sv2::u256_from_int;
 use roles_logic_sv2::{
     channels::server::{jobs::extended::ExtendedJob, share_accounting::ShareAccounting},
     mining_sv2::{ExtendedExtranonce, Extranonce, NewExtendedMiningJob, SetNewPrevHash, Target},
-    utils::Id,
+    utils::{bytes_to_hex, merkle_root_from_path, target_to_difficulty, u256_to_block_hash, Id},
 };
+use stratum_common::bitcoin::{
+    blockdata::block::{Header, Version},
+    hashes::sha256d::Hash,
+    transaction::TxOut,
+    CompactTarget, Target as BitcoinTarget,
+};
+use tracing::debug;
 use v1::utils::HexU32Be;
 
 use crate::{
@@ -115,6 +123,7 @@ pub struct ChannelManager {
 #[derive(Debug, Clone)]
 pub struct DownstreamDifficultyConfig {
     pub min_individual_miner_hashrate: f32,
+    pub target: Target,
     pub submits_since_last_update: u32,
     pub timestamp_of_last_update: u64,
 }
@@ -125,6 +134,7 @@ impl DownstreamDifficultyConfig {
             min_individual_miner_hashrate: 10_000_000_000_000.0,
             submits_since_last_update: 0,
             timestamp_of_last_update: 0,
+            target: u256_from_int(u64::MAX).into(),
         }
     }
 }
@@ -198,16 +208,16 @@ impl ChannelManager {
     /// validated whether share is acceptable or not
     /// Then share the result to downstream and upstream (if accepted)
     /// Check against active and past jobs.
-    pub fn on_submit_share(&self, share: SubmitShareWithChannelId) -> bool {
+    pub fn on_submit_share(&mut self, share: SubmitShareWithChannelId) -> bool {
         let job_id = share.share.job_id.parse::<u32>().unwrap();
-        match self.active_job.as_ref() {
+        match self.active_job.clone() {
             Some(active_job) => {
                 if job_id == active_job.job_id {
-                    return self.share_validation(share, Some(active_job));
+                    return self.validate_share(share, Some(active_job));
                 }
 
                 if self.past_jobs.contains_key(&job_id) {
-                    return self.share_validation(share, self.past_jobs.get(&job_id));
+                    return self.validate_share(share, self.past_jobs.get(&job_id).cloned());
                 }
 
                 return false;
@@ -216,12 +226,114 @@ impl ChannelManager {
         }
     }
 
-    pub fn share_validation(
-        &self,
+    pub fn validate_share(
+        &mut self,
         share: SubmitShareWithChannelId,
-        job: Option<&NewExtendedMiningJob<'static>>,
+        job: Option<NewExtendedMiningJob<'static>>,
     ) -> bool {
-        todo!()
+        let job_id = share.share.job_id;
+
+        if let Some(active_job) = job {
+            let extranonce_prefix = share.extranonce;
+            let mut full_extranonce = vec![];
+            full_extranonce.extend(extranonce_prefix);
+            full_extranonce.extend(share.share.extra_nonce2.as_ref());
+
+            let merkle_root: [u8; 32] = merkle_root_from_path(
+                active_job.coinbase_tx_prefix.inner_as_ref(),
+                active_job.coinbase_tx_suffix.inner_as_ref(),
+                &full_extranonce,
+                &active_job.merkle_path.inner_as_ref(),
+            )
+            .unwrap()
+            .try_into()
+            .expect("merkle root must be 32 bytes");
+
+            if let Some(prev_hash) = self.prev_block_hash.as_ref() {
+                let prev_block_hash = prev_hash.prev_hash.clone();
+                let nbits = CompactTarget::from_consensus(prev_hash.nbits);
+
+                let request_version = share
+                    .share
+                    .version_bits
+                    .clone()
+                    .map(|vb| vb.0)
+                    .unwrap_or(active_job.version);
+
+                let mask = share
+                    .version_rolling_mask
+                    .unwrap_or(HexU32Be(0x1FFFE000_u32))
+                    .0;
+
+                let version = (active_job.version & !mask) | (request_version & mask);
+
+                // create the header for validation
+                let header = Header {
+                    version: Version::from_consensus(version as i32),
+                    prev_blockhash: u256_to_block_hash(prev_block_hash.clone()),
+                    merkle_root: (*Hash::from_bytes_ref(&merkle_root)).into(),
+                    time: share.share.time.0,
+                    bits: nbits,
+                    nonce: share.share.nonce.0,
+                };
+
+                // convert the header hash to a target type for easy comparison
+                let hash = header.block_hash();
+                let raw_hash: [u8; 32] = *hash.to_raw_hash().as_ref();
+                let hash_as_target: Target = raw_hash.into();
+                let hash_as_diff = target_to_difficulty(hash_as_target.clone());
+
+                let network_target = BitcoinTarget::from_compact(nbits);
+
+                // print hash_as_target and self.target as human readable hex
+                let hash_as_u256: binary_sv2::U256 = hash_as_target.clone().into();
+                let mut hash_bytes = hash_as_u256.to_vec();
+                hash_bytes.reverse(); // Convert to big-endian for display
+
+                let difficulty_config = self
+                    .difficulty_config
+                    .get(&Sv1ChannelId(active_job.channel_id));
+
+                if let Some(difficulty) = difficulty_config {
+                    let target = difficulty.target.clone();
+                    let target_u256: binary_sv2::U256 = target.clone().into();
+                    let mut target_bytes = target_u256.to_vec();
+                    target_bytes.reverse();
+
+                    debug!(
+                        "share validation \nshare:\t\t{}\nchannel target:\t{}\nnetwork target:\t{}",
+                        bytes_to_hex(&hash_bytes),
+                        bytes_to_hex(&target_bytes),
+                        format!("{:x}", network_target)
+                    );
+
+                    if hash_as_target <= target {
+                        let share_accounting = self
+                            .share_accounting
+                            .get_mut(&Sv1ChannelId(active_job.channel_id));
+                        if let Some(share_accounting) = share_accounting {
+                            if share_accounting.is_share_seen(hash.to_raw_hash()) {
+                                return false;
+                            }
+                            share_accounting.update_share_accounting(
+                                target_to_difficulty(target.clone()) as u64,
+                                share.share.time.0,
+                                hash.to_raw_hash(),
+                            );
+                            share_accounting.update_best_diff(hash_as_diff);
+                            let last_sequence_number =
+                                share_accounting.get_last_share_sequence_number();
+                            let new_submits_accepted_count = share_accounting.get_shares_accepted();
+                            let new_shares_sum = share_accounting.get_share_work_sum();
+
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+
+        return false;
     }
 
     pub fn on_new_prev_hash(&mut self, set_new_prevhash: SetNewPrevHash<'static>) {
