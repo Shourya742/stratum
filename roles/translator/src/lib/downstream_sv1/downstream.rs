@@ -700,8 +700,8 @@ impl IsDownstream for Downstream {
 //     #[test]
 //     fn gets_difficulty_from_target() {
 //         let target = vec![
-//             0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 128, 255, 127,
-//             0, 0, 0, 0, 0,
+//             0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 128, 255,
+// 127,             0, 0, 0, 0, 0,
 //         ];
 //         let actual = Downstream::difficulty_from_target(target).unwrap();
 //         let expect = 512.0;

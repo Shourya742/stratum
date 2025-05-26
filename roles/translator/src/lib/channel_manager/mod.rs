@@ -77,7 +77,7 @@ impl UpstreamChannelManager {
             upstream_difficulty: HashMap::new(),
         }
     }
-    
+
     pub fn remove(&mut self, id: u32) {
         self.channel_ids.remove(&id);
         // todo: Improve this later
@@ -98,6 +98,8 @@ pub struct ChannelManager {
     pub difficulty_config: HashMap<Sv1ChannelId, DownstreamDifficultyConfig>,
     // ID generator
     pub downstream_id_factory: Id,
+    // Prevhash
+    pub prev_block_hash: Option<SetNewPrevHash<'static>>,
     // future jobs are indexed with job_id (u32)
     pub future_jobs: HashMap<u32, NewExtendedMiningJob<'static>>,
     // Currently active job shared by upstream
@@ -151,6 +153,7 @@ impl ChannelManager {
             expected_share_per_minute,
             difficulty_config: HashMap::new(),
             downstream_id_factory: Id::new(),
+            prev_block_hash: None,
             future_jobs: HashMap::new(),
             active_job: None,
             past_jobs: HashMap::new(),
@@ -225,6 +228,7 @@ impl ChannelManager {
         if self.future_jobs.contains_key(&job_id) {
             self.active_job = self.future_jobs.get(&job_id).cloned();
         }
+        self.prev_block_hash = Some(set_new_prevhash);
         self.future_jobs.clear();
         self.past_jobs.clear();
         self.stale_jobs.clear();
@@ -244,5 +248,13 @@ impl ChannelManager {
         self.active_job = Some(extended_job);
         self.past_jobs
             .insert(past_active_job.job_id, past_active_job);
+    }
+
+    pub fn active_job(&self) -> Option<NewExtendedMiningJob<'static>> {
+        self.active_job.clone()
+    }
+
+    pub fn current_prev_block_hash(&self) -> Option<SetNewPrevHash<'static>> {
+        self.prev_block_hash.clone()
     }
 }

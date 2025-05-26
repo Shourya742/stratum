@@ -612,8 +612,8 @@ pub struct OpenSv1Downstream {
 //             let (tx_sv1_notify, rx_sv1_notify) = broadcast::channel(1);
 //             let (tx_status, _rx_status) = bounded(1);
 //             let upstream_target = vec![
-//                 0, 0, 0, 0, 255, 255, 255, 255, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-//                 0, 0, 0, 0, 0, 0, 0,
+//                 0, 0, 0, 0, 255, 255, 255, 255, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+// 0,                 0, 0, 0, 0, 0, 0, 0,
 //             ];
 //             let interface = BridgeInterface {
 //                 tx_sv1_submit,
@@ -695,8 +695,8 @@ pub struct OpenSv1Downstream {
 //                     channel_id,
 //                     job_id: 0,
 //                     prev_hash: [
-//                         3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3,
-//                         3, 3, 3, 3, 3, 3, 3,
+//                         3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3,
+// 3,                         3, 3, 3, 3, 3, 3, 3,
 //                     ]
 //                     .into(),
 //                     min_ntime: 989898,
