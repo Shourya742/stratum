@@ -114,15 +114,17 @@ impl Bridge {
                     // In this case we already know that, we gonna have a single downstream
                     // channel manager whose job is gonna be to aggregate downstream miners.
 
-                    if let Some(manager) = upstream_channel_manager
-                        .downstream_managers
+                    if let Some(upstream_manager) = upstream_channel_manager
+                        .upstream_manager
                         .values_mut()
                         .next()
                     {
                         let (channel_id, connection_id, extranonce, extranonce2_len) =
-                            manager.on_new_downstream_connection("dummy".into());
-                        let active_job = manager.active_job.clone();
-                        let prev_hash = manager.prev_block_hash.clone();
+                            upstream_manager
+                                .downstream_manager
+                                .on_new_downstream_connection("dummy".into());
+                        let active_job = upstream_manager.downstream_manager.active_job.clone();
+                        let prev_hash = upstream_manager.downstream_manager.prev_block_hash.clone();
                         if let Some(active_job) = active_job {
                             let result = prev_hash.map(|m| {
                                 let last_notify = create_notify(m, active_job, true);
@@ -267,11 +269,12 @@ impl Bridge {
             bridge
                 .upstream_channel_manager
                 .safe_lock(|upstream_channel_manager| {
-                    let downstream_manager = upstream_channel_manager
-                        .downstream_managers
+                    let upstream_manager = upstream_channel_manager
+                        .upstream_manager
                         .get_mut(&new_target.channel_id);
-                    if let Some(downstream_manager) = downstream_manager {
-                        let difficulty_config = downstream_manager
+                    if let Some(upstream_manager) = upstream_manager {
+                        let difficulty_config = upstream_manager
+                            .downstream_manager
                             .difficulty_config
                             .get_mut(&new_target.connection_id);
                         if let Some(difficulty_config) = difficulty_config {
@@ -293,11 +296,12 @@ impl Bridge {
             let verdict = bridge
                 .upstream_channel_manager
                 .safe_lock(|upstream_manager| {
-                    if let Some(downstream) = upstream_manager
-                        .downstream_managers
-                        .get_mut(&share.channel_id)
+                    if let Some(upstream_channel) =
+                        upstream_manager.upstream_manager.get_mut(&share.channel_id)
                     {
-                        return downstream.on_submit_share(share.clone());
+                        return upstream_channel
+                            .downstream_manager
+                            .on_submit_share(share.clone());
                     }
                     false
                 })
@@ -332,10 +336,10 @@ impl Bridge {
         let job = self
             .upstream_channel_manager
             .safe_lock(|upstream_manager| {
-                let downstream_manager = upstream_manager.downstream_managers.get(&channel_id);
-                if let Some(downstream_manager) = downstream_manager {
+                let upstream_manager = upstream_manager.upstream_manager.get(&channel_id);
+                if let Some(upstream_channel) = upstream_manager {
                     if let Ok(job_id) = sv1_submit.job_id.parse::<u32>() {
-                        return downstream_manager.get_job(job_id);
+                        return upstream_channel.downstream_manager.get_job(job_id);
                     }
                 }
                 None
@@ -391,11 +395,11 @@ impl Bridge {
             let value = bridge
                 .upstream_channel_manager
                 .safe_lock(|manager| {
-                    let downstream_channel_manager = manager
-                        .downstream_managers
+                    let upstream_channel = manager
+                        .upstream_manager
                         .get(&sv2_set_new_prev_hash.channel_id);
-                    if let Some(downstream_channel_manager) = downstream_channel_manager {
-                        return downstream_channel_manager.active_job.clone();
+                    if let Some(upstream_channel) = upstream_channel {
+                        return upstream_channel.downstream_manager.active_job.clone();
                     }
                     None
                 })
@@ -448,11 +452,11 @@ impl Bridge {
             let value = bridge
                 .upstream_channel_manager
                 .safe_lock(|manager| {
-                    let downstream_channel_manager = manager
-                        .downstream_managers
+                    let upstream_channel = manager
+                        .upstream_manager
                         .get(&sv2_new_extended_mining_job.channel_id);
-                    if let Some(downstream_channel_manager) = downstream_channel_manager {
-                        return downstream_channel_manager.prev_block_hash.clone();
+                    if let Some(upstream_channel) = upstream_channel {
+                        return upstream_channel.downstream_manager.prev_block_hash.clone();
                     }
                     None
                 })

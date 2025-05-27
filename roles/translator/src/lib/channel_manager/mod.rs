@@ -74,19 +74,23 @@ impl Sv1Channel {
 #[derive(Debug)]
 pub struct UpstreamChannelManager {
     pub channel_ids: HashSet<u32>,
-    pub downstream_managers: HashMap<u32, ChannelManager>,
-    pub upstream_difficulty: HashMap<u32, UpstreamDifficultyConfig>,
-    pub last_sent_hashrate: HashMap<u32, f32>,
+    pub upstream_manager: HashMap<u32, UpstreamChannel>,
     pub aggregate: bool,
+}
+
+#[derive(Debug)]
+pub struct UpstreamChannel {
+    pub downstream_manager: ChannelManager,
+    pub last_sent_hashrate: f32,
+    pub upstream_difficulty: UpstreamDifficultyConfig,
+    pub target: Target,
 }
 
 impl UpstreamChannelManager {
     pub fn new() -> Self {
         Self {
             channel_ids: HashSet::new(),
-            downstream_managers: HashMap::new(),
-            upstream_difficulty: HashMap::new(),
-            last_sent_hashrate: HashMap::new(),
+            upstream_manager: HashMap::new(),
             aggregate: true,
         }
     }
@@ -94,8 +98,7 @@ impl UpstreamChannelManager {
     pub fn remove(&mut self, id: u32) {
         self.channel_ids.remove(&id);
         // todo: Improve this later
-        self.downstream_managers.remove(&id);
-        self.upstream_difficulty.remove(&id);
+        self.upstream_manager.remove(&id);
     }
 }
 

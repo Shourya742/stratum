@@ -28,24 +28,14 @@ impl Upstream {
     pub(super) async fn try_update_hashrate(self_: Arc<Mutex<Self>>) -> ProxyResult<'static, ()> {
         let tx_frame = self_.safe_lock(|u| u.connection.sender.clone())?;
         let result = self_.safe_lock(|upstream| {
-            let result = upstream
+            let result: Vec<(u32, UpstreamDifficultyConfig, f32)> = upstream
                 .upstream_channel_manager
                 .safe_lock(|upstream_manager| {
                     let result = upstream_manager
-                        .channel_ids
+                        .upstream_manager
                         .iter()
-                        .map(|id| {
-                            (
-                                *id,
-                                upstream_manager
-                                    .upstream_difficulty
-                                    .get(id)
-                                    .unwrap()
-                                    .clone(),
-                                *upstream_manager.last_sent_hashrate.get(id).unwrap(),
-                            )
-                        })
-                        .collect::<Vec<(u32, UpstreamDifficultyConfig, f32)>>();
+                        .map(|(k, v)| (*k, v.upstream_difficulty.clone(), v.last_sent_hashrate))
+                        .collect();
                     result
                 })
                 .unwrap();
@@ -73,9 +63,11 @@ impl Upstream {
                     _ = upstream
                         .upstream_channel_manager
                         .safe_lock(|upstream_manager| {
-                            upstream_manager
-                                .last_sent_hashrate
-                                .insert(channel_id, new_hashrate);
+                            if let Some(upstream_channel) =
+                                upstream_manager.upstream_manager.get_mut(&channel_id)
+                            {
+                                upstream_channel.last_sent_hashrate = new_hashrate;
+                            }
                         });
                 })?;
             }

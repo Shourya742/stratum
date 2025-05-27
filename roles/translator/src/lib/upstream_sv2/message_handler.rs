@@ -136,17 +136,17 @@ impl ParseMiningMessagesFromUpstream<Downstream> for Upstream {
                 self.shares_per_minute,
                 m.channel_id,
             );
-            e.downstream_managers
-                .insert(m.channel_id, downstream_channel_manager);
             // Remove this unwrap from here, this can be handled better.
             let upstream_difficulty = self
                 .difficulty_config
                 .safe_lock(|upstream| upstream.clone())
                 .unwrap();
-            e.last_sent_hashrate
-                .insert(m.channel_id, upstream_difficulty.channel_nominal_hashrate);
-            e.upstream_difficulty
-                .insert(m.channel_id, upstream_difficulty);
+            let upstream_channel = e.upstream_manager.get_mut(&m.channel_id);
+            if let Some(upstream_channel) = upstream_channel {
+                upstream_channel.downstream_manager = downstream_channel_manager;
+                upstream_channel.last_sent_hashrate = upstream_difficulty.channel_nominal_hashrate;
+                upstream_channel.upstream_difficulty = upstream_difficulty;
+            };
         })?;
 
         let m = Mining::OpenExtendedMiningChannelSuccess(m.into_static());
@@ -251,9 +251,11 @@ impl ParseMiningMessagesFromUpstream<Downstream> for Upstream {
         debug!("NewExtendedMiningJob: {:?}", m);
 
         self.upstream_channel_manager.safe_lock(|u| {
-            let channel_manager = u.downstream_managers.get_mut(&m.channel_id);
+            let channel_manager = u.upstream_manager.get_mut(&m.channel_id);
             if let Some(channel_manager) = channel_manager {
-                channel_manager.on_new_extended_job(m.clone().as_static());
+                channel_manager
+                    .downstream_manager
+                    .on_new_extended_job(m.clone().as_static());
             }
         })?;
 
@@ -285,9 +287,11 @@ impl ParseMiningMessagesFromUpstream<Downstream> for Upstream {
         );
 
         self.upstream_channel_manager.safe_lock(|u| {
-            let channel_manager = u.downstream_managers.get_mut(&m.channel_id);
+            let channel_manager = u.upstream_manager.get_mut(&m.channel_id);
             if let Some(channel_manager) = channel_manager {
-                channel_manager.on_new_prev_hash(m.clone().as_static());
+                channel_manager
+                    .downstream_manager
+                    .on_new_prev_hash(m.clone().as_static());
             }
         })?;
 
