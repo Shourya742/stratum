@@ -63,8 +63,6 @@ pub struct Bridge {
     /// Allows the bridge the ability to communicate back to the main thread any status updates
     /// that would interest the main thread for error handling
     tx_status: status::Sender,
-    /// The job ID of the last sent `mining.notify` message.
-    last_job_id: u32,
     task_collector: Arc<Mutex<Vec<(AbortHandle, String)>>>,
     upstream_channel_manager: Arc<Mutex<UpstreamChannelManager>>,
 }
@@ -93,7 +91,6 @@ impl Bridge {
             rx_sv2_new_ext_mining_job,
             tx_sv1_notify,
             tx_status,
-            last_job_id: 0,
             task_collector,
             upstream_channel_manager,
         }))
@@ -407,8 +404,6 @@ impl Bridge {
         })?;
 
         if let Some(active_job) = active_job {
-            let job_id = active_job.job_id;
-
             // Sending the notify message to downstream.
             let notify = crate::proxy::next_mining_notify::create_notify(
                 sv2_set_new_prev_hash.clone(),
@@ -418,9 +413,6 @@ impl Bridge {
 
             // Get the sender to send the mining.notify to the Downstream
             tx_sv1_notify.send(notify.clone())?;
-            self_.safe_lock(|s| {
-                s.last_job_id = job_id;
-            })?;
         }
 
         Ok(())
@@ -469,8 +461,6 @@ impl Bridge {
         })?;
 
         if let Some(prev_block_hash) = prev_block_hash {
-            let job_id = sv2_new_extended_mining_job.job_id;
-
             // Sending the notify message to downstream.
             let notify = crate::proxy::next_mining_notify::create_notify(
                 prev_block_hash,
@@ -479,9 +469,6 @@ impl Bridge {
             );
             // Get the sender to send the mining.notify to the Downstream
             tx_sv1_notify.send(notify.clone())?;
-            self_.safe_lock(|s| {
-                s.last_job_id = job_id;
-            })?;
         }
 
         Ok(())

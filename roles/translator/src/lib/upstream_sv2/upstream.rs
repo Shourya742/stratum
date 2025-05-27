@@ -39,8 +39,7 @@ use roles_logic_sv2::{
         mining::{ParseMiningMessagesFromUpstream, SendTo},
     },
     mining_sv2::{
-        ExtendedExtranonce, NewExtendedMiningJob, OpenExtendedMiningChannel, SetNewPrevHash,
-        SubmitSharesExtended,
+        NewExtendedMiningJob, OpenExtendedMiningChannel, SetNewPrevHash, SubmitSharesExtended,
     },
     parsers::Mining,
     utils::Mutex,
@@ -102,11 +101,6 @@ pub struct Upstream {
     /// Sends SV2 `NewExtendedMiningJob` messages to be translated (along with SV2 `SetNewPrevHash`
     /// messages) into SV1 `mining.notify` messages. Received and translated by the `Bridge`.
     tx_sv2_new_ext_mining_job: Sender<NewExtendedMiningJob<'static>>,
-    /// Sends the extranonce1 and the channel id received in the SV2
-    /// `OpenExtendedMiningChannelSuccess` message to be used by the `Downstream` and sent to
-    /// the Downstream role in a SV2 `mining.subscribe` response message. Passed to the
-    /// `Downstream` on connection creation.
-    tx_sv2_extranonce: Sender<(ExtendedExtranonce, u32)>,
     /// This allows the upstream threads to be able to communicate back to the main thread its
     /// current status.
     tx_status: status::Sender,
@@ -152,7 +146,6 @@ impl Upstream {
         tx_sv2_set_new_prev_hash: Sender<SetNewPrevHash<'static>>,
         tx_sv2_new_ext_mining_job: Sender<NewExtendedMiningJob<'static>>,
         min_extranonce_size: u16,
-        tx_sv2_extranonce: Sender<(ExtendedExtranonce, u32)>,
         tx_status: status::Sender,
         target: Arc<Mutex<Vec<u8>>>,
         difficulty_config: Arc<Mutex<UpstreamDifficultyConfig>>,
@@ -203,7 +196,6 @@ impl Upstream {
             min_extranonce_size,
             upstream_extranonce1_size: 16, /* 16 is the default since that is the only value the
                                             * pool supports currently */
-            tx_sv2_extranonce,
             tx_status,
             target,
             last_sent_hashrate: None,
@@ -311,23 +303,16 @@ impl Upstream {
         let task_collector = self_.safe_lock(|s| s.task_collector.clone()).unwrap();
         let collector1 = task_collector.clone();
         let collector2 = task_collector.clone();
-        let (
-            tx_frame,
-            tx_sv2_extranonce,
-            tx_sv2_new_ext_mining_job,
-            tx_sv2_set_new_prev_hash,
-            recv,
-            tx_status,
-        ) = clone.safe_lock(|s| {
-            (
-                s.connection.sender.clone(),
-                s.tx_sv2_extranonce.clone(),
-                s.tx_sv2_new_ext_mining_job.clone(),
-                s.tx_sv2_set_new_prev_hash.clone(),
-                s.connection.receiver.clone(),
-                s.tx_status.clone(),
-            )
-        })?;
+        let (tx_frame, tx_sv2_new_ext_mining_job, tx_sv2_set_new_prev_hash, recv, tx_status) =
+            clone.safe_lock(|s| {
+                (
+                    s.connection.sender.clone(),
+                    s.tx_sv2_new_ext_mining_job.clone(),
+                    s.tx_sv2_set_new_prev_hash.clone(),
+                    s.connection.receiver.clone(),
+                    s.tx_status.clone(),
+                )
+            })?;
         {
             let self_ = self_.clone();
             let tx_status = tx_status.clone();
@@ -385,32 +370,8 @@ impl Upstream {
                     // Does not send the messages anywhere, but instead handle them internally
                     Ok(SendTo::None(Some(m))) => {
                         match m {
-                            Mining::OpenExtendedMiningChannelSuccess(m) => {
-                                let extranonce_extended = self_
-                                    .safe_lock(|upstream| {
-                                        let extended_extranonce = upstream
-                                            .upstream_channel_manager
-                                            .safe_lock(|upstream_channel_manager| {
-                                                let downstream_channel_manager =
-                                                    upstream_channel_manager
-                                                        .downstream_managers
-                                                        .get(&m.channel_id)
-                                                        .unwrap();
-                                                downstream_channel_manager
-                                                    .extended_extranonce_factory
-                                                    .clone()
-                                            })
-                                            .unwrap();
-                                        extended_extranonce
-                                    })
-                                    .unwrap();
-
-                                handle_result!(
-                                    tx_status,
-                                    tx_sv2_extranonce
-                                        .send((extranonce_extended, m.channel_id))
-                                        .await
-                                );
+                            Mining::OpenExtendedMiningChannelSuccess(_m) => {
+                                info!("Open extended mining channel success received");
                             }
                             Mining::NewExtendedMiningJob(m) => {
                                 let job_id = m.job_id;

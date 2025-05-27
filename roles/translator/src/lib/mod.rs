@@ -204,9 +204,6 @@ impl TranslatorSv2 {
         // Channel: Upstream -> Bridge (SV2 NewExtendedMiningJob)
         let (tx_sv2_new_ext_mining_job, rx_sv2_new_ext_mining_job) = bounded(10);
 
-        // Channel: Upstream -> internal_start -> Bridge (Initial Extranonce)
-        let (tx_sv2_extranonce, rx_sv2_extranonce) = bounded(1);
-
         // Channel: Upstream -> Bridge (SV2 SetNewPrevHash)
         let (tx_sv2_set_new_prev_hash, rx_sv2_set_new_prev_hash) = bounded(10);
 
@@ -226,14 +223,13 @@ impl TranslatorSv2 {
         let upstream = match upstream_sv2::Upstream::new(
             upstream_addr,
             proxy_config.upstream_authority_pubkey,
-            rx_sv2_submit_shares_ext,  // Receives shares from Bridge
-            tx_sv2_set_new_prev_hash,  // Sends prev hash updates to Bridge
-            tx_sv2_new_ext_mining_job, // Sends new jobs to Bridge
-            proxy_config.min_extranonce2_size,
-            tx_sv2_extranonce,                           // Sends initial extranonce
+            rx_sv2_submit_shares_ext,          // Receives shares from Bridge
+            tx_sv2_set_new_prev_hash,          // Sends prev hash updates to Bridge
+            tx_sv2_new_ext_mining_job,         // Sends new jobs to Bridge
+            proxy_config.min_extranonce2_size, // Sends initial extranonce
             status::Sender::Upstream(tx_status.clone()), // Sends status updates
-            target.clone(),                              // Shares target state
-            diff_config.clone(),                         // Shares difficulty config
+            target.clone(),                    // Shares target state
+            diff_config.clone(),               // Shares difficulty config
             task_collector_upstream,
             upstream_channel_manager.clone(),
             proxy_config.downstream_difficulty_config.shares_per_minute,
@@ -280,17 +276,6 @@ impl TranslatorSv2 {
             if let Err(e) = upstream_sv2::Upstream::handle_submit(upstream.clone()) {
                 error!("Failed to create submit handler: {}", e);
                 return;
-            }
-
-            // Wait to receive the initial extranonce information from the Upstream.
-            // This is needed before the Bridge can be fully initialized.
-            let (_extended_extranonce, _up_id) = rx_sv2_extranonce.recv().await.unwrap();
-            loop {
-                let target: [u8; 32] = target.safe_lock(|t| t.clone()).unwrap().try_into().unwrap();
-                if target != [0; 32] {
-                    break;
-                };
-                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
             }
 
             let task_collector_bridge = task_collector_init_task.clone();
