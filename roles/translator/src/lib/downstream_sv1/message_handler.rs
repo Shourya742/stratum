@@ -107,6 +107,8 @@ impl IsServer<'static> for Downstream {
 
         // TODO: Check if receiving valid shares by adding diff field to Downstream
 
+        let (tx, rx) = async_channel::bounded::<bool>(1);
+
         let to_send = SubmitShareWithChannelId {
             connection_id: self.connection_id,
             channel_id: self.channel_id,
@@ -114,13 +116,14 @@ impl IsServer<'static> for Downstream {
             extranonce: self.extranonce1.clone(),
             extranonce2_len: self.extranonce2_len,
             version_rolling_mask: self.version_rolling_mask.clone(),
+            verdict_sender: tx,
         };
 
         self.tx_sv1_bridge
             .try_send(DownstreamMessages::SubmitShares(to_send))
             .unwrap();
 
-        true
+        rx.recv_blocking().unwrap()
     }
 
     /// Indicates to the server that the client supports the mining.set_extranonce method.

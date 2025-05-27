@@ -308,6 +308,7 @@ impl Bridge {
                 .unwrap();
             verdict
         })?;
+        _ = share.verdict_sender.send(verdict).await;
         let tx_sv2_submit_shares_ext = self_.safe_lock(|s| s.tx_sv2_submit_shares_ext.clone())?;
 
         if verdict {

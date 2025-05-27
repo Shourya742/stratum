@@ -11,6 +11,7 @@
 //! - [`diff_management`]: (Declared here, likely contains downstream difficulty logic)
 //! - [`downstream`]: Defines the core [`Downstream`] struct and its functionalities.
 
+use async_channel::Sender;
 use roles_logic_sv2::mining_sv2::Target;
 use v1::{client_to_server::Submit, utils::HexU32Be};
 pub mod diff_management;
@@ -48,6 +49,7 @@ pub struct SubmitShareWithChannelId {
     pub extranonce: Vec<u8>,
     pub extranonce2_len: usize,
     pub version_rolling_mask: Option<HexU32Be>,
+    pub verdict_sender: Sender<bool>,
 }
 
 /// message for notifying the bridge that a downstream target has updated

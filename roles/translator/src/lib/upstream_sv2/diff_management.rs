@@ -17,9 +17,7 @@ use super::super::{
     upstream_sv2::{EitherFrame, Message, StdFrame},
 };
 use binary_sv2::u256_from_int;
-use roles_logic_sv2::{
-    mining_sv2::UpdateChannel, parsers::Mining, utils::Mutex, Error as RolesLogicError,
-};
+use roles_logic_sv2::{mining_sv2::UpdateChannel, parsers::Mining, utils::Mutex};
 use std::{sync::Arc, time::Duration};
 
 impl Upstream {
@@ -47,16 +45,16 @@ impl Upstream {
 
             let has_changed = new_hashrate != last_sent_hashrate;
 
-        if has_changed {
-            // Send UpdateChannel only if hashrate actually changed
-            let update_channel = UpdateChannel {
-                channel_id,
-                nominal_hash_rate: new_hashrate,
-                maximum_target: u256_from_int(u64::MAX),
-            };
-            let message = Message::Mining(Mining::UpdateChannel(update_channel));
-            let either_frame: StdFrame = message.try_into()?;
-            let frame: EitherFrame = either_frame.into();
+            if has_changed {
+                // Send UpdateChannel only if hashrate actually changed
+                let update_channel = UpdateChannel {
+                    channel_id,
+                    nominal_hash_rate: new_hashrate,
+                    maximum_target: u256_from_int(u64::MAX),
+                };
+                let message = Message::Mining(Mining::UpdateChannel(update_channel));
+                let either_frame: StdFrame = message.try_into()?;
+                let frame: EitherFrame = either_frame.into();
 
                 tx_frame.send(frame).await?;
                 self_.safe_lock(|upstream| {
