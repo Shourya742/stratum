@@ -76,6 +76,7 @@ pub struct UpstreamChannelManager {
     pub channel_ids: HashSet<u32>,
     pub downstream_managers: HashMap<u32, ChannelManager>,
     pub upstream_difficulty: HashMap<u32, UpstreamDifficultyConfig>,
+    pub last_sent_hashrate: HashMap<u32, f32>,
     pub aggregate: bool,
 }
 
@@ -85,6 +86,7 @@ impl UpstreamChannelManager {
             channel_ids: HashSet::new(),
             downstream_managers: HashMap::new(),
             upstream_difficulty: HashMap::new(),
+            last_sent_hashrate: HashMap::new(),
             aggregate: true,
         }
     }

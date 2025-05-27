@@ -80,11 +80,6 @@ struct PrevHash {
 /// templates, and managing the SV2 protocol handshake and channel lifecycle.
 #[derive(Debug, Clone)]
 pub struct Upstream {
-    /// Newly assigned identifier of the channel, stable for the whole lifetime of the connection,
-    /// e.g. it is used for broadcasting new jobs by the `NewExtendedMiningJob` message.
-    pub(super) channel_id: Option<u32>,
-    /// Bytes used as implicit first part of `extranonce`.
-    pub(super) extranonce_prefix: Option<Vec<u8>>,
     /// Represents a connection to a SV2 Upstream role.
     pub(super) connection: UpstreamConnection,
     /// Receives SV2 `SubmitSharesExtended` messages translated from SV1 `mining.submit` messages.
@@ -104,8 +99,6 @@ pub struct Upstream {
     /// messages. Passed to the `Downstream` on connection creation and sent to the Downstream role
     /// via the SV1 `mining.set_difficulty` message.
     pub(super) target: Arc<Mutex<Vec<u8>>>,
-    /// Tracks the most recently sent nominal hashrate to prevent unnecessary updates.
-    pub last_sent_hashrate: Option<f32>,
     /// Minimum `extranonce2` size. Initially requested in the `proxy-config.toml`, and ultimately
     /// set by the SV2 Upstream via the SV2 `OpenExtendedMiningChannelSuccess` message.
     pub min_extranonce_size: u16,
@@ -119,12 +112,6 @@ pub struct Upstream {
     task_collector: Arc<Mutex<Vec<(AbortHandle, String)>>>,
     pub(super) upstream_channel_manager: Arc<Mutex<UpstreamChannelManager>>,
     pub(super) shares_per_minute: f32,
-}
-
-impl PartialEq for Upstream {
-    fn eq(&self, other: &Self) -> bool {
-        self.channel_id == other.channel_id
-    }
 }
 
 impl Upstream {
@@ -182,16 +169,13 @@ impl Upstream {
         Ok(Arc::new(Mutex::new(Self {
             connection,
             rx_sv2_submit_shares_ext,
-            extranonce_prefix: None,
             tx_sv2_set_new_prev_hash,
             tx_sv2_new_ext_mining_job,
-            channel_id: None,
             min_extranonce_size,
             upstream_extranonce1_size: 16, /* 16 is the default since that is the only value the
                                             * pool supports currently */
             tx_status,
             target,
-            last_sent_hashrate: None,
             difficulty_config,
             task_collector,
             upstream_channel_manager,

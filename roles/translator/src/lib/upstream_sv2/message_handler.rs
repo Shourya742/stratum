@@ -123,10 +123,8 @@ impl ParseMiningMessagesFromUpstream<Downstream> for Upstream {
         self.target.safe_lock(|t| *t = m.target.to_vec())?;
 
         info!("Up: Successfully Opened Extended Mining Channel");
-        self.channel_id = Some(m.channel_id);
-        self.extranonce_prefix = Some(m.extranonce_prefix.to_vec());
 
-        _ = self.upstream_channel_manager.safe_lock(|e| {
+        self.upstream_channel_manager.safe_lock(|e| {
             info!("Updating upstream channel manager state with new upstream connection");
 
             e.channel_ids.insert(m.channel_id);
@@ -145,8 +143,10 @@ impl ParseMiningMessagesFromUpstream<Downstream> for Upstream {
                 .difficulty_config
                 .safe_lock(|upstream| upstream.clone())
                 .unwrap();
+            e.last_sent_hashrate
+                .insert(m.channel_id, upstream_difficulty.channel_nominal_hashrate);
             e.upstream_difficulty
-                .insert(m.channel_id, upstream_difficulty)
+                .insert(m.channel_id, upstream_difficulty);
         })?;
 
         let m = Mining::OpenExtendedMiningChannelSuccess(m.into_static());
