@@ -32,25 +32,35 @@ impl Downstream {
         self_: Arc<Mutex<Self>>,
         init_target: &[u8],
     ) -> ProxyResult<'static, ()> {
-        let (channel_id, connection_id, upstream_difficulty_config, miner_hashrate) = self_
-            .safe_lock(|d| {
-                let timestamp_secs = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .expect("time went backwards")
-                    .as_secs();
-                d.difficulty_mgmt.timestamp_of_last_update = timestamp_secs;
-                d.difficulty_mgmt.submits_since_last_update = 0;
-                (
-                    d.channel_id,
-                    d.connection_id.clone(),
-                    d.upstream_difficulty_config.clone(),
-                    d.difficulty_mgmt.min_individual_miner_hashrate,
-                )
-            })?;
-        // add new connection hashrate to channel hashrate
-        upstream_difficulty_config.safe_lock(|u| {
-            u.channel_nominal_hashrate += miner_hashrate;
+        let (channel_id, connection_id, miner_hashrate) = self_.safe_lock(|d| {
+            let timestamp_secs = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("time went backwards")
+                .as_secs();
+            d.difficulty_mgmt.timestamp_of_last_update = timestamp_secs;
+            d.difficulty_mgmt.submits_since_last_update = 0;
+            (
+                d.channel_id,
+                d.connection_id.clone(),
+                d.difficulty_mgmt.min_individual_miner_hashrate,
+            )
         })?;
+
+        self_.safe_lock(|downstream| {
+            _ = downstream
+                .upstream_channel_manager
+                .safe_lock(|upstream_channel_manager| {
+                    let upstream_channel = upstream_channel_manager
+                        .upstream_manager
+                        .get_mut(&downstream.channel_id);
+                    if let Some(upstream_channel) = upstream_channel {
+                        upstream_channel
+                            .upstream_difficulty
+                            .channel_nominal_hashrate += miner_hashrate;
+                    }
+                });
+        })?;
+
         // update downstream target with bridge
         let init_target = binary_sv2::U256::try_from(init_target.to_vec())?;
         Self::send_message_upstream(
@@ -73,18 +83,32 @@ impl Downstream {
     /// the channel to the upstream server.
     #[allow(clippy::result_large_err)]
     pub fn remove_miner_hashrate_from_channel(self_: Arc<Mutex<Self>>) -> ProxyResult<'static, ()> {
-        self_.safe_lock(|d| {
-            d.upstream_difficulty_config
-                .safe_lock(|u| {
-                    let hashrate_to_subtract = d.difficulty_mgmt.min_individual_miner_hashrate;
-                    if u.channel_nominal_hashrate >= hashrate_to_subtract {
-                        u.channel_nominal_hashrate -= hashrate_to_subtract;
-                    } else {
-                        u.channel_nominal_hashrate = 0.0;
+        self_.safe_lock(|downstream| {
+            _ = downstream
+                .upstream_channel_manager
+                .safe_lock(|upstream_channel_manager| {
+                    let upstream_channel = upstream_channel_manager
+                        .upstream_manager
+                        .get_mut(&downstream.channel_id);
+                    if let Some(upstream_channel) = upstream_channel {
+                        let hashrate_to_substract =
+                            downstream.difficulty_mgmt.min_individual_miner_hashrate;
+                        if upstream_channel
+                            .upstream_difficulty
+                            .channel_nominal_hashrate
+                            >= hashrate_to_substract
+                        {
+                            upstream_channel
+                                .upstream_difficulty
+                                .channel_nominal_hashrate -= hashrate_to_substract;
+                        } else {
+                            upstream_channel
+                                .upstream_difficulty
+                                .channel_nominal_hashrate = 0.0;
+                        }
                     }
-                })
-                .map_err(|_e| Error::PoisonLock)
-        })??;
+                });
+        })?;
         Ok(())
     }
 
@@ -314,11 +338,14 @@ impl Downstream {
                 d.difficulty_mgmt.min_individual_miner_hashrate = new_miner_hashrate;
                 d.difficulty_mgmt.timestamp_of_last_update = timestamp_secs;
                 d.difficulty_mgmt.submits_since_last_update = 0;
-                d.upstream_difficulty_config.super_safe_lock(|c| {
-                    if c.channel_nominal_hashrate + hashrate_delta > 0.0 {
-                        c.channel_nominal_hashrate += hashrate_delta;
-                    } else {
-                        c.channel_nominal_hashrate = 0.0;
+                _ = d.upstream_channel_manager.safe_lock(|upstream_channel_manager| {
+                    let upstream_channel = upstream_channel_manager.upstream_manager.get_mut(&d.channel_id);
+                    if let Some(upstream_channel) = upstream_channel {
+                        if upstream_channel.upstream_difficulty.channel_nominal_hashrate + hashrate_delta> 0.0 {
+                            upstream_channel.upstream_difficulty.channel_nominal_hashrate += hashrate_delta;
+                        } else {
+                            upstream_channel.upstream_difficulty.channel_nominal_hashrate = 0.0;
+                        }
                     }
                 });
                 Ok(Some(new_miner_hashrate))

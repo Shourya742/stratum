@@ -206,8 +206,6 @@ impl TranslatorSv2 {
                 .expect("Failed to parse upstream address!"),
             proxy_config.upstream_port,
         );
-        // Shared difficulty configuration
-        let diff_config = Arc::new(Mutex::new(proxy_config.upstream_difficulty_config.clone()));
 
         let upstream_channel_manager = Arc::new(Mutex::new(UpstreamChannelManager::new(
             proxy_config.min_extranonce2_size,
@@ -286,7 +284,7 @@ impl TranslatorSv2 {
                 tx_sv1_notify.clone(),
                 status::Sender::Bridge(tx_status.clone()),
                 task_collector_bridge,
-                upstream_channel_manager,
+                upstream_channel_manager.clone(),
             );
             // Start the Bridge's main processing loop.
             proxy::Bridge::start(b.clone());
@@ -306,8 +304,8 @@ impl TranslatorSv2 {
                 status::Sender::DownstreamListener(tx_status.clone()),
                 b,
                 proxy_config.downstream_difficulty_config,
-                diff_config,
                 task_collector_downstream,
+                upstream_channel_manager.clone(),
             );
         }); // End of init task
         let _ =

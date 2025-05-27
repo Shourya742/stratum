@@ -19,8 +19,8 @@
 //!   ([`IsMiningDownstream`], [`IsDownstream`]).
 
 use crate::{
-    channel_manager::Sv1ChannelId,
-    config::{DownstreamDifficultyConfig, UpstreamDifficultyConfig},
+    channel_manager::{Sv1ChannelId, UpstreamChannelManager},
+    config::DownstreamDifficultyConfig,
     error::ProxyResult,
     status,
 };
@@ -80,8 +80,8 @@ pub struct Downstream {
     /// Configuration and state for managing difficulty adjustments specific
     /// to this individual downstream miner.
     pub(super) difficulty_mgmt: DownstreamDifficultyConfig,
-    /// Configuration settings for the upstream channel's difficulty management.
-    pub(super) upstream_difficulty_config: Arc<Mutex<UpstreamDifficultyConfig>>,
+
+    pub(super) upstream_channel_manager: Arc<Mutex<UpstreamChannelManager>>,
 }
 
 impl Downstream {
@@ -108,7 +108,7 @@ impl Downstream {
         extranonce2_len: usize,
         host: String,
         difficulty_config: DownstreamDifficultyConfig,
-        upstream_difficulty_config: Arc<Mutex<UpstreamDifficultyConfig>>,
+        upstream_channel_manager: Arc<Mutex<UpstreamChannelManager>>,
         task_collector: Arc<Mutex<Vec<(AbortHandle, String)>>>,
     ) {
         // Reads and writes from Downstream SV1 Mining Device Client
@@ -128,7 +128,7 @@ impl Downstream {
             first_job_received: false,
             extranonce2_len,
             difficulty_mgmt: difficulty_config,
-            upstream_difficulty_config,
+            upstream_channel_manager,
         }));
         let self_ = downstream.clone();
 
@@ -356,8 +356,8 @@ impl Downstream {
         tx_status: status::Sender,
         bridge: Arc<Mutex<crate::proxy::Bridge>>,
         downstream_difficulty_config: DownstreamDifficultyConfig,
-        upstream_difficulty_config: Arc<Mutex<UpstreamDifficultyConfig>>,
         task_collector: Arc<Mutex<Vec<(AbortHandle, String)>>>,
+        upstream_channel_manager: Arc<Mutex<UpstreamChannelManager>>,
     ) {
         let accept_connections = tokio::task::spawn({
             let task_collector = task_collector.clone();
@@ -388,7 +388,7 @@ impl Downstream {
                                 opened.extranonce2_len as usize,
                                 host,
                                 downstream_difficulty_config.clone(),
-                                upstream_difficulty_config.clone(),
+                                upstream_channel_manager.clone(),
                                 task_collector.clone(),
                             )
                             .await;
