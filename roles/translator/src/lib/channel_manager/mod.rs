@@ -76,6 +76,7 @@ pub struct UpstreamChannelManager {
     pub channel_ids: HashSet<u32>,
     pub downstream_managers: HashMap<u32, ChannelManager>,
     pub upstream_difficulty: HashMap<u32, UpstreamDifficultyConfig>,
+    pub aggregate: bool,
 }
 
 impl UpstreamChannelManager {
@@ -84,6 +85,7 @@ impl UpstreamChannelManager {
             channel_ids: HashSet::new(),
             downstream_managers: HashMap::new(),
             upstream_difficulty: HashMap::new(),
+            aggregate: true,
         }
     }
 
@@ -118,6 +120,8 @@ pub struct ChannelManager {
     pub past_jobs: HashMap<u32, NewExtendedMiningJob<'static>>,
     // stale jobs are indexed with job_id (u32)
     pub stale_jobs: HashMap<u32, NewExtendedMiningJob<'static>>,
+    // Channel id
+    pub channel_id: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -146,6 +150,7 @@ impl ChannelManager {
         extranonce_size: usize,
         min_extranonce_size: usize,
         expected_share_per_minute: f32,
+        channel_id: u32,
     ) -> Self {
         let tproxy_len = proxy_extranonce1_len(extranonce_size, min_extranonce_size);
         let range_0 = 0..extranonce_prefix_len;
@@ -170,6 +175,7 @@ impl ChannelManager {
             active_job: None,
             past_jobs: HashMap::new(),
             stale_jobs: HashMap::new(),
+            channel_id,
         }
     }
 
@@ -178,10 +184,10 @@ impl ChannelManager {
     /// 2. I should assign a extranonce field for new downstream
     /// 3. I should add an entry in share_accounter
     /// 4. I should add an entry in difficulty_config
-    fn on_new_downstream_connection(
+    pub fn on_new_downstream_connection(
         &mut self,
         user_identity: String,
-    ) -> (Sv1ChannelId, Vec<u8>, usize) {
+    ) -> (u32, Sv1ChannelId, Vec<u8>, usize) {
         let new_downstream_id = Sv1ChannelId(self.downstream_id_factory.next());
         let max_extranonce2_len = self.extended_extranonce_factory.get_range2_len() as usize;
         let new_extranonce = self
@@ -199,6 +205,7 @@ impl ChannelManager {
         self.difficulty_config
             .insert(new_downstream_id.clone(), DownstreamDifficultyConfig::new());
         (
+            self.channel_id,
             new_downstream_id,
             new_extranonce.to_vec(),
             max_extranonce2_len,

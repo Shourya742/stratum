@@ -19,6 +19,7 @@
 //!   ([`IsMiningDownstream`], [`IsDownstream`]).
 
 use crate::{
+    channel_manager::Sv1ChannelId,
     config::{DownstreamDifficultyConfig, UpstreamDifficultyConfig},
     downstream_sv1,
     error::ProxyResult,
@@ -62,7 +63,9 @@ const MAX_LINE_LENGTH: usize = 2_usize.pow(16);
 #[derive(Debug)]
 pub struct Downstream {
     /// The unique identifier assigned to this downstream connection/channel.
-    pub(super) connection_id: u32,
+    pub(super) connection_id: Sv1ChannelId,
+    /// The channel id of the upstream channel
+    pub(super) channel_id: u32,
     /// List of authorized Downstream Mining Devices.
     authorized_names: Vec<String>,
     /// The extranonce1 value assigned to this downstream miner.
@@ -92,35 +95,34 @@ pub struct Downstream {
 
 impl Downstream {
     // not huge fan of test specific code in codebase.
-    #[cfg(test)]
-    pub fn new(
-        connection_id: u32,
-        authorized_names: Vec<String>,
-        extranonce1: Vec<u8>,
-        version_rolling_mask: Option<HexU32Be>,
-        version_rolling_min_bit: Option<HexU32Be>,
-        tx_sv1_bridge: Sender<DownstreamMessages>,
-        tx_outgoing: Sender<json_rpc::Message>,
-        first_job_received: bool,
-        extranonce2_len: usize,
-        difficulty_mgmt: DownstreamDifficultyConfig,
-        upstream_difficulty_config: Arc<Mutex<UpstreamDifficultyConfig>>,
-        last_job_id: String,
-    ) -> Self {
-        Downstream {
-            connection_id,
-            authorized_names,
-            extranonce1,
-            version_rolling_mask,
-            version_rolling_min_bit,
-            tx_sv1_bridge,
-            tx_outgoing,
-            first_job_received,
-            extranonce2_len,
-            difficulty_mgmt,
-            upstream_difficulty_config,
-        }
-    }
+    // #[cfg(test)]
+    // pub fn new(
+    //     connection_id: u32,
+    //     authorized_names: Vec<String>,
+    //     extranonce1: Vec<u8>,
+    //     version_rolling_mask: Option<HexU32Be>,
+    //     version_rolling_min_bit: Option<HexU32Be>,
+    //     tx_sv1_bridge: Sender<DownstreamMessages>,
+    //     tx_outgoing: Sender<json_rpc::Message>,
+    //     first_job_received: bool,
+    //     extranonce2_len: usize,
+    //     difficulty_mgmt: DownstreamDifficultyConfig,
+    //     upstream_difficulty_config: Arc<Mutex<UpstreamDifficultyConfig>>
+    // ) -> Self {
+    //     Downstream {
+    //         connection_id,
+    //         authorized_names,
+    //         extranonce1,
+    //         version_rolling_mask,
+    //         version_rolling_min_bit,
+    //         tx_sv1_bridge,
+    //         tx_outgoing,
+    //         first_job_received,
+    //         extranonce2_len,
+    //         difficulty_mgmt,
+    //         upstream_difficulty_config,
+    //     }
+    // }
     /// Instantiates and manages a new handler for a single downstream SV1 client connection.
     ///
     /// This is the primary function called for each new incoming TCP stream from a miner.
@@ -134,7 +136,8 @@ impl Downstream {
     #[allow(clippy::too_many_arguments)]
     pub async fn new_downstream(
         stream: TcpStream,
-        connection_id: u32,
+        channel_id: u32,
+        connection_id: Sv1ChannelId,
         tx_sv1_bridge: Sender<DownstreamMessages>,
         mut rx_sv1_notify: broadcast::Receiver<server_to_client::Notify<'static>>,
         tx_status: status::Sender,
@@ -152,6 +155,7 @@ impl Downstream {
 
         let downstream = Arc::new(Mutex::new(Downstream {
             connection_id,
+            channel_id,
             authorized_names: vec![],
             extranonce1,
             //extranonce1: extranonce1.to_vec(),
@@ -408,11 +412,12 @@ impl Downstream {
                     let host = stream.peer_addr().unwrap().to_string();
 
                     match open_sv1_downstream {
-                        Ok(opened) => {
+                        Ok(Some(opened)) => {
                             info!("PROXY SERVER - ACCEPTING FROM DOWNSTREAM: {}", host);
                             Downstream::new_downstream(
                                 stream,
                                 opened.channel_id,
+                                opened.connection_id,
                                 tx_sv1_submit.clone(),
                                 tx_mining_notify.subscribe(),
                                 tx_status.listener_to_connection(),
@@ -426,11 +431,8 @@ impl Downstream {
                             )
                             .await;
                         }
-                        Err(e) => {
-                            tracing::error!(
-                                "Failed to create a new downstream connection: {:?}",
-                                e
-                            );
+                        Err(_) | Ok(None) => {
+                            tracing::error!("Failed to create a new downstream connection",);
                         }
                     }
                 }
@@ -610,7 +612,8 @@ impl IsServer<'static> for Downstream {
         // TODO: Check if receiving valid shares by adding diff field to Downstream
 
         let to_send = SubmitShareWithChannelId {
-            channel_id: self.connection_id,
+            connection_id: self.connection_id.clone(),
+            channel_id: self.channel_id,
             share: request.clone(),
             extranonce: self.extranonce1.clone(),
             extranonce2_len: self.extranonce2_len,

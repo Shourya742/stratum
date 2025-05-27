@@ -32,7 +32,7 @@ impl Downstream {
         self_: Arc<Mutex<Self>>,
         init_target: &[u8],
     ) -> ProxyResult<'static, ()> {
-        let (connection_id, upstream_difficulty_config, miner_hashrate) = self_.safe_lock(|d| {
+        let (channel_id, upstream_difficulty_config, miner_hashrate) = self_.safe_lock(|d| {
             let timestamp_secs = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .expect("time went backwards")
@@ -40,7 +40,7 @@ impl Downstream {
             d.difficulty_mgmt.timestamp_of_last_update = timestamp_secs;
             d.difficulty_mgmt.submits_since_last_update = 0;
             (
-                d.connection_id,
+                d.channel_id,
                 d.upstream_difficulty_config.clone(),
                 d.difficulty_mgmt.min_individual_miner_hashrate,
             )
@@ -54,7 +54,7 @@ impl Downstream {
         Self::send_message_upstream(
             self_,
             DownstreamMessages::SetDownstreamTarget(SetDownstreamTarget {
-                channel_id: connection_id,
+                channel_id,
                 new_target: init_target.into(),
             }),
         )
@@ -100,7 +100,7 @@ impl Downstream {
     ) -> ProxyResult<'static, ()> {
         let (diff_mgmt, channel_id) = self_
             .clone()
-            .safe_lock(|d| (d.difficulty_mgmt.clone(), d.connection_id))?;
+            .safe_lock(|d| (d.difficulty_mgmt.clone(), d.channel_id))?;
         tracing::debug!(
             "Time of last diff update: {:?}",
             diff_mgmt.timestamp_of_last_update

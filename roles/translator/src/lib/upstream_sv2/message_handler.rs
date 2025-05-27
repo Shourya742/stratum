@@ -136,6 +136,7 @@ impl ParseMiningMessagesFromUpstream<Downstream> for Upstream {
                 m.extranonce_size as usize,
                 self.min_extranonce_size as usize,
                 self.shares_per_minute,
+                m.channel_id,
             );
             e.downstream_managers
                 .insert(m.channel_id, downstream_channel_manager);

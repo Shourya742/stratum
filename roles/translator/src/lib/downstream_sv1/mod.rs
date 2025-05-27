@@ -17,6 +17,8 @@ pub mod diff_management;
 pub mod downstream;
 pub use downstream::Downstream;
 
+use crate::channel_manager::Sv1ChannelId;
+
 /// This constant defines a timeout duration. It is used to enforce
 /// that clients sending a `mining.subscribe` message must follow up
 /// with a `mining.authorize` within this period. This prevents
@@ -39,6 +41,7 @@ pub enum DownstreamMessages {
 /// process
 #[derive(Debug, Clone)]
 pub struct SubmitShareWithChannelId {
+    pub connection_id: Sv1ChannelId,
     pub channel_id: u32,
     pub share: Submit<'static>,
     pub extranonce: Vec<u8>,

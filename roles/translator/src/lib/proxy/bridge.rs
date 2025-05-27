@@ -17,7 +17,10 @@
 //! - Broadcasting translated SV1 notifications to connected downstream miners.
 //! - Managing channel state and difficulty related to job translation.
 //! - Handling new downstream SV1 connections.
-use crate::channel_manager::UpstreamChannelManager;
+use crate::{
+    channel_manager::{Sv1ChannelId, UpstreamChannelManager},
+    proxy::next_mining_notify::create_notify,
+};
 
 use super::super::{
     downstream_sv1::{DownstreamMessages, SetDownstreamTarget, SubmitShareWithChannelId},
@@ -31,7 +34,6 @@ use roles_logic_sv2::{
     mining_sv2::{
         ExtendedExtranonce, NewExtendedMiningJob, SetNewPrevHash, SubmitSharesExtended, Target,
     },
-    parsers::Mining,
     utils::{GroupId, Mutex},
     Error as RolesLogicError,
 };
@@ -64,21 +66,7 @@ pub struct Bridge {
     /// Allows the bridge the ability to communicate back to the main thread any status updates
     /// that would interest the main thread for error handling
     tx_status: status::Sender,
-    /// Stores the most recent SV1 `mining.notify` values to be sent to the `Downstream` upon
-    /// receiving a new SV2 `SetNewPrevHash` and `NewExtendedMiningJob` messages **before** any
-    /// Downstream role connects to the proxy.
-    ///
-    /// Once the proxy establishes a connection with the SV2 Upstream role, it immediately receives
-    /// a SV2 `SetNewPrevHash` and `NewExtendedMiningJob` message. This happens before the
-    /// connection to the Downstream role(s) occur. The `last_notify` member fields allows these
-    /// first notify values to be relayed to the `Downstream` once a Downstream role connects. Once
-    /// a Downstream role connects and receives the first notify values, this member field is no
-    /// longer used.
-    last_notify: Option<server_to_client::Notify<'static>>,
     pub(self) channel_factory: ProxyExtendedChannelFactory,
-    /// The mining target currently in use by the downstream miners connected to this bridge.
-    /// This target is derived from the upstream's requirements but may be adjusted locally.
-    target: Arc<Mutex<Vec<u8>>>,
     /// The job ID of the last sent `mining.notify` message.
     last_job_id: u32,
     task_collector: Arc<Mutex<Vec<(AbortHandle, String)>>>,
@@ -117,7 +105,6 @@ impl Bridge {
             rx_sv2_new_ext_mining_job,
             tx_sv1_notify,
             tx_status,
-            last_notify: None,
             channel_factory: ProxyExtendedChannelFactory::new(
                 ids,
                 extranonces,
@@ -127,7 +114,6 @@ impl Bridge {
                 None,
                 up_id,
             ),
-            target,
             last_job_id: 0,
             task_collector,
             upstream_channel_manager,
@@ -143,40 +129,53 @@ impl Bridge {
     #[allow(clippy::result_large_err)]
     pub fn on_new_sv1_connection(
         &mut self,
-        hash_rate: f32,
-    ) -> ProxyResult<'static, OpenSv1Downstream> {
-        match self.channel_factory.new_extended_channel(0, hash_rate, 0) {
-            Ok(messages) => {
-                for message in messages {
-                    match message {
-                        Mining::OpenExtendedMiningChannelSuccess(success) => {
-                            let extranonce = success.extranonce_prefix.to_vec();
-                            let extranonce2_len = success.extranonce_size;
-                            self.target.safe_lock(|t| *t = success.target.to_vec())?;
-                            return Ok(OpenSv1Downstream {
-                                channel_id: success.channel_id,
-                                last_notify: self.last_notify.clone(),
-                                extranonce,
-                                target: self.target.clone(),
-                                extranonce2_len,
+        _hash_rate: f32,
+    ) -> ProxyResult<'static, Option<OpenSv1Downstream>> {
+        let result = self
+            .upstream_channel_manager
+            .safe_lock(|upstream_channel_manager| {
+                if upstream_channel_manager.aggregate {
+                    // In this case we already know that, we gonna have a single downstream
+                    // channel manager whose job is gonna be to aggregate downstream miners.
+
+                    if let Some(manager) = upstream_channel_manager
+                        .downstream_managers
+                        .values_mut()
+                        .next()
+                    {
+                        let (channel_id, connection_id, extranonce, extranonce2_len) =
+                            manager.on_new_downstream_connection("dummy".into());
+                        let active_job = manager.active_job.clone();
+                        let prev_hash = manager.prev_block_hash.clone();
+                        if let Some(active_job) = active_job {
+                            let result = prev_hash.map(|m| {
+                                let last_notify = create_notify(m, active_job, true);
+                                OpenSv1Downstream {
+                                    channel_id,
+                                    connection_id,
+                                    last_notify: Some(last_notify),
+                                    extranonce,
+                                    extranonce2_len: extranonce2_len as u16,
+                                }
                             });
+                            return Ok(result);
                         }
-                        Mining::OpenMiningChannelError(_) => todo!(),
-                        Mining::SetNewPrevHash(_) => (),
-                        Mining::NewExtendedMiningJob(_) => (),
-                        _ => unreachable!(),
+                        return Ok(Some(OpenSv1Downstream {
+                            channel_id,
+                            connection_id,
+                            last_notify: None,
+                            extranonce,
+                            extranonce2_len: extranonce2_len as u16,
+                        }));
                     }
+                    Ok(None)
+                } else {
+                    // For each new connection we gonna open a separate OpenExtendedMiningChannel
+                    // with upstream.
+                    Ok(None)
                 }
-            }
-            Err(_) => {
-                return Err(Error::SubprotocolMining(
-                    "Bridge: failed to open new extended channel".to_string(),
-                ))
-            }
-        };
-        Err(Error::SubprotocolMining(
-            "Bridge: Invalid mining message when opening downstream connection".to_string(),
-        ))
+            })?;
+        result
     }
 
     /// Starts the tasks responsible for receiving and processing
@@ -188,9 +187,55 @@ impl Bridge {
     /// 3. `handle_downstream_messages`: Listens for `DownstreamMessages` (e.g., submit shares) from
     ///    downstream clients.
     pub fn start(self_: Arc<Mutex<Self>>) {
-        Self::handle_new_prev_hash(self_.clone());
-        Self::handle_new_extended_mining_job(self_.clone());
+        Self::start_upstream_job_handler(self_.clone());
         Self::handle_downstream_messages(self_);
+    }
+
+    fn start_upstream_job_handler(self_: Arc<Mutex<Self>>) {
+        let task_collector = self_.safe_lock(|b| b.task_collector.clone()).unwrap();
+        let (tx_sv1_notify, rx_prev_hash, rx_new_job, tx_status) = self_
+            .safe_lock(|s| {
+                (
+                    s.tx_sv1_notify.clone(),
+                    s.rx_sv2_set_new_prev_hash.clone(),
+                    s.rx_sv2_new_ext_mining_job.clone(),
+                    s.tx_status.clone(),
+                )
+            })
+            .unwrap();
+
+        debug!("Starting upstream job handler task");
+        let handle = tokio::task::spawn(async move {
+            loop {
+                tokio::select! {
+                    Ok(prev_hash) = rx_prev_hash.recv() => {
+                        debug!("Received SetNewPrevHash (Job ID: {:?})", prev_hash.job_id);
+                        handle_result!(
+                            tx_status.clone(),
+                            Self::handle_new_prev_hash_(self_.clone(), prev_hash, tx_sv1_notify.clone()).await
+                        );
+                    }
+                    Ok(new_job) = rx_new_job.recv() => {
+                        debug!("Received NewExtendedMiningJob (Job ID: {:?})", new_job.job_id);
+                        handle_result!(
+                            tx_status.clone(),
+                            Self::handle_new_extended_mining_job_(self_.clone(), new_job, tx_sv1_notify.clone()).await
+                        );
+                         crate::upstream_sv2::upstream::IS_NEW_JOB_HANDLED
+                            .store(true, std::sync::atomic::Ordering::SeqCst);
+                    }
+                    else => {
+                        // One or both channels closed, indicating upstream disconnection or shutdown.
+                        debug!("Upstream job channel(s) closed. Exiting job handler.");
+                        break;
+                    }
+                }
+            }
+        });
+
+        task_collector
+            .safe_lock(|c| c.push((handle.abort_handle(), "handle_upstream_job_handler".into())))
+            .unwrap();
     }
 
     /// Task handler that receives `DownstreamMessages` and dispatches them.
@@ -199,37 +244,36 @@ impl Bridge {
     /// It matches on the `DownstreamMessages` variant and calls the appropriate
     /// handler function (`handle_submit_shares` or `handle_update_downstream_target`).
     fn handle_downstream_messages(self_: Arc<Mutex<Self>>) {
-        let task_collector_handle_downstream =
-            self_.safe_lock(|b| b.task_collector.clone()).unwrap();
+        let task_collector = self_.safe_lock(|b| b.task_collector.clone()).unwrap();
         let (rx_sv1_downstream, tx_status) = self_
             .safe_lock(|s| (s.rx_sv1_downstream.clone(), s.tx_status.clone()))
             .unwrap();
-        let handle_downstream = tokio::task::spawn(async move {
-            loop {
-                let msg = handle_result!(tx_status, rx_sv1_downstream.clone().recv().await);
 
-                match msg {
-                    DownstreamMessages::SubmitShares(share) => {
-                        handle_result!(
-                            tx_status,
-                            Self::handle_submit_shares(self_.clone(), share).await
-                        );
+        let handle = tokio::task::spawn(async move {
+            loop {
+                match rx_sv1_downstream.recv().await {
+                    Ok(msg) => {
+                        let res = match msg {
+                            DownstreamMessages::SubmitShares(share) => {
+                                Self::handle_submit_shares(self_.clone(), share).await
+                            }
+                            DownstreamMessages::SetDownstreamTarget(new_target) => {
+                                Self::handle_update_downstream_target(self_.clone(), new_target)
+                            }
+                        };
+                        handle_result!(tx_status.clone(), res);
                     }
-                    DownstreamMessages::SetDownstreamTarget(new_target) => {
-                        handle_result!(
-                            tx_status,
-                            Self::handle_update_downstream_target(self_.clone(), new_target)
-                        );
+                    Err(_) => {
+                        debug!("Downstream channel closed. Exiting downstream handler.");
+                        break;
                     }
-                };
+                }
             }
         });
-        let _ = task_collector_handle_downstream.safe_lock(|a| {
-            a.push((
-                handle_downstream.abort_handle(),
-                "handle_downstream_message".to_string(),
-            ))
-        });
+
+        task_collector
+            .safe_lock(|c| c.push((handle.abort_handle(), "handle_downstream_messages".into())))
+            .unwrap();
     }
 
     /// Receives a `SetDownstreamTarget` message and updates the downstream target for a specific
@@ -370,57 +414,11 @@ impl Bridge {
             // Get the sender to send the mining.notify to the Downstream
             tx_sv1_notify.send(notify.clone())?;
             self_.safe_lock(|s| {
-                s.last_notify = Some(notify);
                 s.last_job_id = job_id;
             })?;
         }
 
         Ok(())
-    }
-
-    /// Task handler that receives SV2 `SetNewPrevHash` messages from the upstream.
-    ///
-    /// This loop continuously receives `SetNewPrevHash` messages. It calls the
-    /// internal `handle_new_prev_hash_` helper function to process each message.
-    fn handle_new_prev_hash(self_: Arc<Mutex<Self>>) {
-        let task_collector_handle_new_prev_hash =
-            self_.safe_lock(|b| b.task_collector.clone()).unwrap();
-        let (tx_sv1_notify, rx_sv2_set_new_prev_hash, tx_status) = self_
-            .safe_lock(|s| {
-                (
-                    s.tx_sv1_notify.clone(),
-                    s.rx_sv2_set_new_prev_hash.clone(),
-                    s.tx_status.clone(),
-                )
-            })
-            .unwrap();
-        debug!("Starting handle_new_prev_hash task");
-        let handle_new_prev_hash = tokio::task::spawn(async move {
-            loop {
-                // Receive `SetNewPrevHash` from `Upstream`
-                let sv2_set_new_prev_hash: SetNewPrevHash =
-                    handle_result!(tx_status, rx_sv2_set_new_prev_hash.clone().recv().await);
-                debug!(
-                    "handle_new_prev_hash job_id: {:?}",
-                    &sv2_set_new_prev_hash.job_id
-                );
-                handle_result!(
-                    tx_status.clone(),
-                    Self::handle_new_prev_hash_(
-                        self_.clone(),
-                        sv2_set_new_prev_hash,
-                        tx_sv1_notify.clone(),
-                    )
-                    .await
-                )
-            }
-        });
-        let _ = task_collector_handle_new_prev_hash.safe_lock(|a| {
-            a.push((
-                handle_new_prev_hash.abort_handle(),
-                "handle_new_prev_hash".to_string(),
-            ))
-        });
     }
 
     /// Internal helper function to handle a received SV2 `NewExtendedMiningJob` message.
@@ -477,63 +475,11 @@ impl Bridge {
             // Get the sender to send the mining.notify to the Downstream
             tx_sv1_notify.send(notify.clone())?;
             self_.safe_lock(|s| {
-                s.last_notify = Some(notify);
                 s.last_job_id = job_id;
             })?;
         }
 
         Ok(())
-    }
-
-    /// Task handler that receives SV2 `NewExtendedMiningJob` messages from the upstream.
-    ///
-    /// This loop continuously receives `NewExtendedMiningJob` messages. It calls the
-    /// internal `handle_new_extended_mining_job_` helper function to process each message.
-    /// After processing, it signals that a new job has been handled (used for synchronization
-    /// with the `handle_new_prev_hash` task).
-    fn handle_new_extended_mining_job(self_: Arc<Mutex<Self>>) {
-        let task_collector_new_extended_mining_job =
-            self_.safe_lock(|b| b.task_collector.clone()).unwrap();
-        let (tx_sv1_notify, rx_sv2_new_ext_mining_job, tx_status) = self_
-            .safe_lock(|s| {
-                (
-                    s.tx_sv1_notify.clone(),
-                    s.rx_sv2_new_ext_mining_job.clone(),
-                    s.tx_status.clone(),
-                )
-            })
-            .unwrap();
-        debug!("Starting handle_new_extended_mining_job task");
-        let handle_new_extended_mining_job = tokio::task::spawn(async move {
-            loop {
-                // Receive `NewExtendedMiningJob` from `Upstream`
-                let sv2_new_extended_mining_job: NewExtendedMiningJob = handle_result!(
-                    tx_status.clone(),
-                    rx_sv2_new_ext_mining_job.clone().recv().await
-                );
-                debug!(
-                    "handle_new_extended_mining_job job_id: {:?}",
-                    &sv2_new_extended_mining_job.job_id
-                );
-                handle_result!(
-                    tx_status,
-                    Self::handle_new_extended_mining_job_(
-                        self_.clone(),
-                        sv2_new_extended_mining_job,
-                        tx_sv1_notify.clone(),
-                    )
-                    .await
-                );
-                crate::upstream_sv2::upstream::IS_NEW_JOB_HANDLED
-                    .store(true, std::sync::atomic::Ordering::SeqCst);
-            }
-        });
-        let _ = task_collector_new_extended_mining_job.safe_lock(|a| {
-            a.push((
-                handle_new_extended_mining_job.abort_handle(),
-                "handle_new_extended_mining_job".to_string(),
-            ))
-        });
     }
 }
 
@@ -544,15 +490,15 @@ impl Bridge {
 /// channel ID assigned to the connection, the initial job notification to send,
 /// and the extranonce and target specific to this channel.
 pub struct OpenSv1Downstream {
-    /// The unique ID assigned to this downstream channel by the channel factory.
+    /// The unique ID assigned to this upstream channel by the channel factory.
     pub channel_id: u32,
+    /// This is use to pin point a single downstream channel.
+    pub connection_id: Sv1ChannelId,
     /// The most recent `mining.notify` message to send to the new client immediately
     /// upon connection to provide them with a job.
     pub last_notify: Option<server_to_client::Notify<'static>>,
     /// The extranonce prefix assigned to this channel.
     pub extranonce: Vec<u8>,
-    /// The mining target assigned to this channel
-    pub target: Arc<Mutex<Vec<u8>>>,
     /// The size of the extranonce2 field expected from the miner for this channel.
     pub extranonce2_len: u16,
 }
