@@ -383,4 +383,21 @@ impl ChannelManager {
     pub fn current_prev_block_hash(&self) -> Option<SetNewPrevHash<'static>> {
         self.prev_block_hash.clone()
     }
+
+    pub fn get_job(&self, job_id: u32) -> Option<NewExtendedMiningJob<'static>> {
+        if let Some(active_job) = self.active_job.clone() {
+            if active_job.job_id == job_id {
+                return Some(active_job);
+            }
+        }
+
+        let job = self.past_jobs.get(&job_id);
+        if let Some(job) = job {
+            if job.job_id == job_id {
+                return Some(job.to_owned());
+            }
+        }
+
+        None
+    }
 }

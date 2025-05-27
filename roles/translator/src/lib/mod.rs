@@ -284,7 +284,7 @@ impl TranslatorSv2 {
 
             // Wait to receive the initial extranonce information from the Upstream.
             // This is needed before the Bridge can be fully initialized.
-            let (extended_extranonce, up_id) = rx_sv2_extranonce.recv().await.unwrap();
+            let (_extended_extranonce, _up_id) = rx_sv2_extranonce.recv().await.unwrap();
             loop {
                 let target: [u8; 32] = target.safe_lock(|t| t.clone()).unwrap().try_into().unwrap();
                 if target != [0; 32] {
@@ -302,9 +302,6 @@ impl TranslatorSv2 {
                 rx_sv2_new_ext_mining_job,
                 tx_sv1_notify.clone(),
                 status::Sender::Bridge(tx_status.clone()),
-                extended_extranonce,
-                target,
-                up_id,
                 task_collector_bridge,
                 upstream_channel_manager,
             );

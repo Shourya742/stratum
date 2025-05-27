@@ -54,6 +54,7 @@ pub struct SubmitShareWithChannelId {
 #[derive(Debug)]
 pub struct SetDownstreamTarget {
     pub channel_id: u32,
+    pub connection_id: Sv1ChannelId,
     pub new_target: Target,
 }
 

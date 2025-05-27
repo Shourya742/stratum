@@ -30,11 +30,8 @@ use super::super::{
 use async_channel::{Receiver, Sender};
 use error_handling::handle_result;
 use roles_logic_sv2::{
-    channel_logic::channel_factory::{ExtendedChannelKind, ProxyExtendedChannelFactory},
-    mining_sv2::{
-        ExtendedExtranonce, NewExtendedMiningJob, SetNewPrevHash, SubmitSharesExtended, Target,
-    },
-    utils::{GroupId, Mutex},
+    mining_sv2::{NewExtendedMiningJob, SetNewPrevHash, SubmitSharesExtended},
+    utils::Mutex,
     Error as RolesLogicError,
 };
 use std::sync::Arc;
@@ -66,7 +63,6 @@ pub struct Bridge {
     /// Allows the bridge the ability to communicate back to the main thread any status updates
     /// that would interest the main thread for error handling
     tx_status: status::Sender,
-    pub(self) channel_factory: ProxyExtendedChannelFactory,
     /// The job ID of the last sent `mining.notify` message.
     last_job_id: u32,
     task_collector: Arc<Mutex<Vec<(AbortHandle, String)>>>,
@@ -87,17 +83,9 @@ impl Bridge {
         rx_sv2_new_ext_mining_job: Receiver<NewExtendedMiningJob<'static>>,
         tx_sv1_notify: broadcast::Sender<server_to_client::Notify<'static>>,
         tx_status: status::Sender,
-        extranonces: ExtendedExtranonce,
-        target: Arc<Mutex<Vec<u8>>>,
-        up_id: u32,
         task_collector: Arc<Mutex<Vec<(AbortHandle, String)>>>,
         upstream_channel_manager: Arc<Mutex<UpstreamChannelManager>>,
     ) -> Arc<Mutex<Self>> {
-        let ids = Arc::new(Mutex::new(GroupId::new()));
-        let share_per_min = 1.0;
-        let upstream_target: [u8; 32] =
-            target.safe_lock(|t| t.clone()).unwrap().try_into().unwrap();
-        let upstream_target: Target = upstream_target.into();
         Arc::new(Mutex::new(Self {
             rx_sv1_downstream,
             tx_sv2_submit_shares_ext,
@@ -105,15 +93,6 @@ impl Bridge {
             rx_sv2_new_ext_mining_job,
             tx_sv1_notify,
             tx_status,
-            channel_factory: ProxyExtendedChannelFactory::new(
-                ids,
-                extranonces,
-                None,
-                share_per_min,
-                ExtendedChannelKind::Proxy { upstream_target },
-                None,
-                up_id,
-            ),
             last_job_id: 0,
             task_collector,
             upstream_channel_manager,
@@ -287,9 +266,23 @@ impl Bridge {
         self_: Arc<Mutex<Self>>,
         new_target: SetDownstreamTarget,
     ) -> ProxyResult<'static, ()> {
-        self_.safe_lock(|b| {
-            b.channel_factory
-                .update_target_for_channel(new_target.channel_id, new_target.new_target);
+        self_.safe_lock(|bridge| {
+            bridge
+                .upstream_channel_manager
+                .safe_lock(|upstream_channel_manager| {
+                    let downstream_manager = upstream_channel_manager
+                        .downstream_managers
+                        .get_mut(&new_target.channel_id);
+                    if let Some(downstream_manager) = downstream_manager {
+                        let difficulty_config = downstream_manager
+                            .difficulty_config
+                            .get_mut(&new_target.connection_id);
+                        if let Some(difficulty_config) = difficulty_config {
+                            difficulty_config.target = new_target.new_target;
+                        }
+                    }
+                })
+                .unwrap();
         })?;
         Ok(())
     }
@@ -339,28 +332,40 @@ impl Bridge {
         sv1_submit: Submit,
         version_rolling_mask: Option<HexU32Be>,
     ) -> ProxyResult<'static, SubmitSharesExtended<'static>> {
-        let last_version = self
-            .channel_factory
-            .last_valid_job_version()
-            .ok_or(Error::RolesSv2Logic(RolesLogicError::NoValidJob))?;
-        let version = match (sv1_submit.version_bits, version_rolling_mask) {
-            // regarding version masking see https://github.com/slushpool/stratumprotocol/blob/master/stratum-extensions.mediawiki#changes-in-request-miningsubmit
-            (Some(vb), Some(mask)) => (last_version & !mask.0) | (vb.0 & mask.0),
-            (None, None) => last_version,
-            _ => return Err(Error::V1Protocol(v1::error::Error::InvalidSubmission)),
-        };
-        let mining_device_extranonce: Vec<u8> = sv1_submit.extra_nonce2.into();
-        let extranonce2 = mining_device_extranonce;
-        Ok(SubmitSharesExtended {
-            channel_id,
-            // I put 0 below cause sequence_number is not what should be TODO
-            sequence_number: 0,
-            job_id: sv1_submit.job_id.parse::<u32>()?,
-            nonce: sv1_submit.nonce.0,
-            ntime: sv1_submit.time.0,
-            version,
-            extranonce: extranonce2.try_into()?,
-        })
+        let job = self
+            .upstream_channel_manager
+            .safe_lock(|upstream_manager| {
+                let downstream_manager = upstream_manager.downstream_managers.get(&channel_id);
+                if let Some(downstream_manager) = downstream_manager {
+                    if let Ok(job_id) = sv1_submit.job_id.parse::<u32>() {
+                        return downstream_manager.get_job(job_id);
+                    }
+                }
+                None
+            })
+            .unwrap();
+        if let Some(job) = job {
+            let last_version = job.version;
+            let version = match (sv1_submit.version_bits, version_rolling_mask) {
+                // regarding version masking see https://github.com/slushpool/stratumprotocol/blob/master/stratum-extensions.mediawiki#changes-in-request-miningsubmit
+                (Some(vb), Some(mask)) => (last_version & !mask.0) | (vb.0 & mask.0),
+                (None, None) => last_version,
+                _ => return Err(Error::V1Protocol(v1::error::Error::InvalidSubmission)),
+            };
+            let mining_device_extranonce: Vec<u8> = sv1_submit.extra_nonce2.into();
+            let extranonce2 = mining_device_extranonce;
+            return Ok(SubmitSharesExtended {
+                channel_id,
+                // I put 0 below cause sequence_number is not what should be TODO
+                sequence_number: 0,
+                job_id: sv1_submit.job_id.parse::<u32>()?,
+                nonce: sv1_submit.nonce.0,
+                ntime: sv1_submit.time.0,
+                version,
+                extranonce: extranonce2.try_into()?,
+            });
+        }
+        Err(Error::RolesSv2Logic(RolesLogicError::NoValidJob))
     }
 
     /// Internal helper function to handle a received SV2 `SetNewPrevHash` message.
