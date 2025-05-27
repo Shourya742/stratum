@@ -303,7 +303,6 @@ impl TranslatorSv2 {
                 tx_sv1_notify,
                 status::Sender::DownstreamListener(tx_status.clone()),
                 b,
-                proxy_config.downstream_difficulty_config,
                 task_collector_downstream,
                 upstream_channel_manager.clone(),
             );

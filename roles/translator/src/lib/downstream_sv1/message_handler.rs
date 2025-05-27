@@ -108,7 +108,7 @@ impl IsServer<'static> for Downstream {
         // TODO: Check if receiving valid shares by adding diff field to Downstream
 
         let to_send = SubmitShareWithChannelId {
-            connection_id: self.connection_id.clone(),
+            connection_id: self.connection_id,
             channel_id: self.channel_id,
             share: request.clone(),
             extranonce: self.extranonce1.clone(),

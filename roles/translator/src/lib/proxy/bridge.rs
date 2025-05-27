@@ -103,10 +103,7 @@ impl Bridge {
     /// extranonce and target for the miner, and provides the last known
     /// `mining.notify` message to immediately send to the new client.
     #[allow(clippy::result_large_err)]
-    pub fn on_new_sv1_connection(
-        &mut self,
-        _hash_rate: f32,
-    ) -> ProxyResult<'static, Option<OpenSv1Downstream>> {
+    pub fn on_new_sv1_connection(&mut self) -> ProxyResult<'static, Option<OpenSv1Downstream>> {
         let result = self
             .upstream_channel_manager
             .safe_lock(|upstream_channel_manager| {

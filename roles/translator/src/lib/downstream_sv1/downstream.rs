@@ -20,7 +20,6 @@
 
 use crate::{
     channel_manager::{Sv1ChannelId, UpstreamChannelManager},
-    config::DownstreamDifficultyConfig,
     error::ProxyResult,
     status,
 };
@@ -77,9 +76,6 @@ pub struct Downstream {
     pub(super) first_job_received: bool,
     /// The expected size of the extranonce2 field provided by the miner.
     pub(super) extranonce2_len: usize,
-    /// Configuration and state for managing difficulty adjustments specific
-    /// to this individual downstream miner.
-    pub(super) difficulty_mgmt: DownstreamDifficultyConfig,
 
     pub(super) upstream_channel_manager: Arc<Mutex<UpstreamChannelManager>>,
 }
@@ -107,7 +103,6 @@ impl Downstream {
         last_notify: Option<server_to_client::Notify<'static>>,
         extranonce2_len: usize,
         host: String,
-        difficulty_config: DownstreamDifficultyConfig,
         upstream_channel_manager: Arc<Mutex<UpstreamChannelManager>>,
         task_collector: Arc<Mutex<Vec<(AbortHandle, String)>>>,
     ) {
@@ -127,7 +122,6 @@ impl Downstream {
             tx_outgoing,
             first_job_received: false,
             extranonce2_len,
-            difficulty_mgmt: difficulty_config,
             upstream_channel_manager,
         }));
         let self_ = downstream.clone();
@@ -355,7 +349,6 @@ impl Downstream {
         tx_mining_notify: broadcast::Sender<server_to_client::Notify<'static>>,
         tx_status: status::Sender,
         bridge: Arc<Mutex<crate::proxy::Bridge>>,
-        downstream_difficulty_config: DownstreamDifficultyConfig,
         task_collector: Arc<Mutex<Vec<(AbortHandle, String)>>>,
         upstream_channel_manager: Arc<Mutex<UpstreamChannelManager>>,
     ) {
@@ -365,11 +358,8 @@ impl Downstream {
                 let listener = TcpListener::bind(downstream_addr).await.unwrap();
 
                 while let Ok((stream, _)) = listener.accept().await {
-                    let expected_hash_rate =
-                        downstream_difficulty_config.min_individual_miner_hashrate;
-                    let open_sv1_downstream = bridge
-                        .safe_lock(|s| s.on_new_sv1_connection(expected_hash_rate))
-                        .unwrap();
+                    let open_sv1_downstream =
+                        bridge.safe_lock(|s| s.on_new_sv1_connection()).unwrap();
 
                     let host = stream.peer_addr().unwrap().to_string();
 
@@ -387,7 +377,6 @@ impl Downstream {
                                 opened.last_notify,
                                 opened.extranonce2_len as usize,
                                 host,
-                                downstream_difficulty_config.clone(),
                                 upstream_channel_manager.clone(),
                                 task_collector.clone(),
                             )

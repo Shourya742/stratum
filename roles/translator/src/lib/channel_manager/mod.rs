@@ -34,7 +34,7 @@ use crate::{
     utils::proxy_extranonce1_len,
 };
 
-#[derive(PartialEq, Hash, Eq, Clone, Debug)]
+#[derive(PartialEq, Hash, Eq, Clone, Debug, Copy)]
 pub struct Sv1ChannelId(u32);
 
 /// Sv1 channel representation
@@ -112,6 +112,142 @@ impl UpstreamChannelManager {
         self.channel_ids.remove(&id);
         // todo: Improve this later
         self.upstream_manager.remove(&id);
+    }
+
+    pub fn downstream_difficulty_hashrate(
+        &self,
+        channel_id: u32,
+        connection_id: Sv1ChannelId,
+    ) -> Option<f32> {
+        if let Some(upstream_channel) = self.upstream_manager.get(&channel_id) {
+            if let Some(difficulty_manager) = upstream_channel
+                .downstream_manager
+                .difficulty_config
+                .get(&connection_id)
+            {
+                return Some(difficulty_manager.min_individual_miner_hashrate.clone());
+            }
+        }
+        None
+    }
+
+    pub fn downstream_difficulty_target(
+        &self,
+        channel_id: u32,
+        connection_id: Sv1ChannelId,
+    ) -> Option<Target> {
+        if let Some(upstream_channel) = self.upstream_manager.get(&channel_id) {
+            if let Some(difficulty_manager) = upstream_channel
+                .downstream_manager
+                .difficulty_config
+                .get(&connection_id)
+            {
+                return Some(difficulty_manager.target.clone());
+            }
+        }
+        None
+    }
+
+    pub fn downstream_difficulty_submits_since_last_update(
+        &self,
+        channel_id: u32,
+        connection_id: Sv1ChannelId,
+    ) -> Option<u32> {
+        if let Some(upstream_channel) = self.upstream_manager.get(&channel_id) {
+            if let Some(difficulty_manager) = upstream_channel
+                .downstream_manager
+                .difficulty_config
+                .get(&connection_id)
+            {
+                return Some(difficulty_manager.submits_since_last_update.clone());
+            }
+        }
+        None
+    }
+
+    pub fn downstream_difficulty_timestamp_of_last_update(
+        &self,
+        channel_id: u32,
+        connection_id: Sv1ChannelId,
+    ) -> Option<u64> {
+        if let Some(upstream_channel) = self.upstream_manager.get(&channel_id) {
+            if let Some(difficulty_manager) = upstream_channel
+                .downstream_manager
+                .difficulty_config
+                .get(&connection_id)
+            {
+                return Some(difficulty_manager.timestamp_of_last_update.clone());
+            }
+        }
+        None
+    }
+
+    pub fn set_downstream_difficulty_hashrate(
+        &mut self,
+        channel_id: u32,
+        connection_id: Sv1ChannelId,
+        hashrate: f32,
+    ) {
+        if let Some(upstream_channel) = self.upstream_manager.get_mut(&channel_id) {
+            if let Some(difficulty_manager) = upstream_channel
+                .downstream_manager
+                .difficulty_config
+                .get_mut(&connection_id)
+            {
+                difficulty_manager.min_individual_miner_hashrate = hashrate;
+            }
+        }
+    }
+
+    pub fn set_downstream_difficulty_target(
+        &mut self,
+        channel_id: u32,
+        connection_id: Sv1ChannelId,
+        target: Target,
+    ) {
+        if let Some(upstream_channel) = self.upstream_manager.get_mut(&channel_id) {
+            if let Some(difficulty_manager) = upstream_channel
+                .downstream_manager
+                .difficulty_config
+                .get_mut(&connection_id)
+            {
+                difficulty_manager.target = target;
+            }
+        }
+    }
+
+    pub fn set_downstream_difficulty_submits_since_last_update(
+        &mut self,
+        channel_id: u32,
+        connection_id: Sv1ChannelId,
+        last_update: u32,
+    ) {
+        if let Some(upstream_channel) = self.upstream_manager.get_mut(&channel_id) {
+            if let Some(difficulty_manager) = upstream_channel
+                .downstream_manager
+                .difficulty_config
+                .get_mut(&connection_id)
+            {
+                difficulty_manager.submits_since_last_update = last_update;
+            }
+        }
+    }
+
+    pub fn set_downstream_difficulty_timestamp_of_last_update(
+        &mut self,
+        channel_id: u32,
+        connection_id: Sv1ChannelId,
+        timestamp_since_last_update: u64,
+    ) {
+        if let Some(upstream_channel) = self.upstream_manager.get_mut(&channel_id) {
+            if let Some(difficulty_manager) = upstream_channel
+                .downstream_manager
+                .difficulty_config
+                .get_mut(&connection_id)
+            {
+                difficulty_manager.timestamp_of_last_update = timestamp_since_last_update;
+            }
+        }
     }
 }
 
