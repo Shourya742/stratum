@@ -34,7 +34,6 @@ use error_handling::handle_result;
 use key_utils::Secp256k1PublicKey;
 use network_helpers_sv2::noise_connection::Connection;
 use roles_logic_sv2::{
-    common_messages_sv2::{Protocol, SetupConnection},
     handlers::{
         common::ParseCommonMessagesFromUpstream,
         mining::{ParseMiningMessagesFromUpstream, SendTo},
@@ -554,49 +553,5 @@ impl Upstream {
             .safe_lock(|a| a.push((handle_submit.abort_handle(), "handle_submit".to_string())));
 
         Ok(())
-    }
-
-    // Unimplemented method to check if a submitted share is contained within the upstream target.
-    //
-    // This method is currently unimplemented (`todo!()`). Its purpose would be
-    // to validate a share against the target set by the upstream pool.
-    fn _is_contained_in_upstream_target(&self, _share: SubmitSharesExtended) -> bool {
-        todo!()
-    }
-
-    // Creates the initial `SetupConnection` message for the SV2 handshake.
-    //
-    // This message contains information about the proxy acting as a mining device,
-    // including supported protocol versions, flags, and hardcoded endpoint details.
-    //
-    // TODO: The Mining Device information is currently hardcoded. It should ideally
-    // be configurable or derived from the downstream connections.
-    #[allow(clippy::result_large_err)]
-    fn get_setup_connection_message(
-        min_version: u16,
-        max_version: u16,
-        is_work_selection_enabled: bool,
-    ) -> ProxyResult<'static, SetupConnection<'static>> {
-        let endpoint_host = "0.0.0.0".to_string().into_bytes().try_into()?;
-        let vendor = String::new().try_into()?;
-        let hardware_version = String::new().try_into()?;
-        let firmware = String::new().try_into()?;
-        let device_id = String::new().try_into()?;
-        let flags = match is_work_selection_enabled {
-            false => 0b0000_0000_0000_0000_0000_0000_0000_0100,
-            true => 0b0000_0000_0000_0000_0000_0000_0000_0110,
-        };
-        Ok(SetupConnection {
-            protocol: Protocol::MiningProtocol,
-            min_version,
-            max_version,
-            flags,
-            endpoint_host,
-            endpoint_port: 50,
-            vendor,
-            hardware_version,
-            firmware,
-            device_id,
-        })
     }
 }

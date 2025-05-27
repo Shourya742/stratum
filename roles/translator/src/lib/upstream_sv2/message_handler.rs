@@ -1,10 +1,7 @@
 use roles_logic_sv2::{
     common_messages_sv2::Protocol,
     common_properties::{IsMiningUpstream, IsUpstream},
-    handlers::{
-        common::{ParseCommonMessagesFromUpstream, SendTo as SendToCommon},
-        mining::{ParseMiningMessagesFromUpstream, SendTo, SupportedChannelTypes},
-    },
+    handlers::mining::{ParseMiningMessagesFromUpstream, SendTo, SupportedChannelTypes},
     mining_sv2::{NewExtendedMiningJob, SetNewPrevHash},
     parsers::Mining,
     Error as RolesLogicError,
@@ -18,7 +15,7 @@ use crate::{
 
 use tracing::{debug, error, warn};
 
-use roles_logic_sv2::{common_messages_sv2::Reconnect, mining_sv2::SetGroupChannel};
+use roles_logic_sv2::mining_sv2::SetGroupChannel;
 
 use super::upstream::Upstream;
 
@@ -62,41 +59,6 @@ impl IsMiningUpstream for Upstream {
     }
 
     fn update_channels(&mut self, _c: roles_logic_sv2::common_properties::UpstreamChannel) {
-        todo!()
-    }
-}
-
-impl ParseCommonMessagesFromUpstream for Upstream {
-    // Handles the SV2 `SetupConnectionSuccess` message received from the upstream.
-    //
-    // Returns `Ok(SendToCommon::None(None))` as this message is handled internally
-    // and does not require a direct response or forwarding.
-    fn handle_setup_connection_success(
-        &mut self,
-        m: roles_logic_sv2::common_messages_sv2::SetupConnectionSuccess,
-    ) -> Result<SendToCommon, RolesLogicError> {
-        info!(
-            "Received `SetupConnectionSuccess`: version={}, flags={:b}",
-            m.used_version, m.flags
-        );
-        Ok(SendToCommon::None(None))
-    }
-
-    fn handle_setup_connection_error(
-        &mut self,
-        _: roles_logic_sv2::common_messages_sv2::SetupConnectionError,
-    ) -> Result<SendToCommon, RolesLogicError> {
-        todo!()
-    }
-
-    fn handle_channel_endpoint_changed(
-        &mut self,
-        _: roles_logic_sv2::common_messages_sv2::ChannelEndpointChanged,
-    ) -> Result<SendToCommon, RolesLogicError> {
-        todo!()
-    }
-
-    fn handle_reconnect(&mut self, _m: Reconnect) -> Result<SendToCommon, RolesLogicError> {
         todo!()
     }
 }
