@@ -310,7 +310,7 @@ impl ParseMiningMessagesFromUpstream<Downstream> for Upstream {
             m.channel_id, m.job_id
         );
         debug!("SetCustomMiningJobSuccess: {:?}", m);
-        self.last_job_id = Some(m.job_id);
+        debug!("Tproxy will never receive this message, and if it does, kindly ignore");
         Ok(SendTo::None(None))
     }
 

@@ -86,8 +86,6 @@ pub struct Upstream {
     pub(super) channel_id: Option<u32>,
     /// Identifier of the job as provided by the `NewExtendedMiningJob` message.
     job_id: Option<u32>,
-    /// Identifier of the job as provided by the ` SetCustomMiningJobSucces` message
-    pub(super) last_job_id: Option<u32>,
     /// Bytes used as implicit first part of `extranonce`.
     pub(super) extranonce_prefix: Option<Vec<u8>>,
     /// Represents a connection to a SV2 Upstream role.
@@ -192,7 +190,6 @@ impl Upstream {
             tx_sv2_new_ext_mining_job,
             channel_id: None,
             job_id: None,
-            last_job_id: None,
             min_extranonce_size,
             upstream_extranonce1_size: 16, /* 16 is the default since that is the only value the
                                             * pool supports currently */
@@ -445,16 +442,9 @@ impl Upstream {
     {
         self_
             .safe_lock(|s| {
-                if s.is_work_selection_enabled() {
-                    s.last_job_id
-                        .ok_or(super::super::error::Error::RolesSv2Logic(
-                            RolesLogicError::NoValidTranslatorJob,
-                        ))
-                } else {
-                    s.job_id.ok_or(super::super::error::Error::RolesSv2Logic(
-                        RolesLogicError::NoValidJob,
-                    ))
-                }
+                s.job_id.ok_or(super::super::error::Error::RolesSv2Logic(
+                    RolesLogicError::NoValidJob,
+                ))
             })
             .map_err(|_e| PoisonLock)
     }
