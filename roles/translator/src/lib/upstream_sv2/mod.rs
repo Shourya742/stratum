@@ -12,6 +12,7 @@ use codec_sv2::{StandardEitherFrame, StandardSv2Frame};
 use roles_logic_sv2::parsers::AnyMessage;
 
 pub mod diff_management;
+pub mod message_handler;
 pub mod upstream;
 pub mod upstream_connection;
 pub use upstream::Upstream;
@@ -20,12 +21,3 @@ pub use upstream_connection::UpstreamConnection;
 pub type Message = AnyMessage<'static>;
 pub type StdFrame = StandardSv2Frame<Message>;
 pub type EitherFrame = StandardEitherFrame<Message>;
-
-/// Represents the state or parameters negotiated during an SV2 Setup Connection message.
-#[derive(Clone, Copy, Debug)]
-pub struct Sv2MiningConnection {
-    _version: u16,
-    _setup_connection_flags: u32,
-    #[allow(dead_code)]
-    setup_connection_success_flags: u32,
-}

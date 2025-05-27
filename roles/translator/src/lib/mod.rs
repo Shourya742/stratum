@@ -235,6 +235,7 @@ impl TranslatorSv2 {
             target.clone(),                              // Shares target state
             diff_config.clone(),                         // Shares difficulty config
             task_collector_upstream,
+            upstream_channel_manager.clone(),
         )
         .await
         {
