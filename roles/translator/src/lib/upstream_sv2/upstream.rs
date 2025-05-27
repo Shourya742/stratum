@@ -18,10 +18,10 @@
 //!   `ParseCommonMessagesFromUpstream`, `ParseMiningMessagesFromUpstream`).
 
 use crate::{
-    channel_manager::{ChannelManager, UpstreamChannelManager},
+    channel_manager::UpstreamChannelManager,
     config::UpstreamDifficultyConfig,
     error::{
-        Error::{CodecNoise, InvalidExtranonce, PoisonLock, UpstreamIncoming},
+        Error::{CodecNoise, PoisonLock, UpstreamIncoming},
         ProxyResult,
     },
     status,
@@ -40,8 +40,8 @@ use roles_logic_sv2::{
         mining::{ParseMiningMessagesFromUpstream, SendTo},
     },
     mining_sv2::{
-        ExtendedExtranonce, Extranonce, NewExtendedMiningJob, OpenExtendedMiningChannel,
-        SetNewPrevHash, SubmitSharesExtended,
+        ExtendedExtranonce, NewExtendedMiningJob, OpenExtendedMiningChannel, SetNewPrevHash,
+        SubmitSharesExtended,
     },
     parsers::Mining,
     utils::Mutex,
@@ -129,7 +129,8 @@ pub struct Upstream {
     // than the configured percentage
     pub(super) difficulty_config: Arc<Mutex<UpstreamDifficultyConfig>>,
     task_collector: Arc<Mutex<Vec<(AbortHandle, String)>>>,
-    upstream_channel_manager: Arc<Mutex<UpstreamChannelManager>>,
+    pub(super) upstream_channel_manager: Arc<Mutex<UpstreamChannelManager>>,
+    pub(super) shares_per_minute: f32,
 }
 
 impl PartialEq for Upstream {
@@ -158,6 +159,7 @@ impl Upstream {
         difficulty_config: Arc<Mutex<UpstreamDifficultyConfig>>,
         task_collector: Arc<Mutex<Vec<(AbortHandle, String)>>>,
         upstream_channel_manager: Arc<Mutex<UpstreamChannelManager>>,
+        shares_per_minute: f32,
     ) -> ProxyResult<'static, Arc<Mutex<Self>>> {
         // Connect to the SV2 Upstream role retry connection every 5 seconds.
         let socket = loop {
@@ -209,6 +211,7 @@ impl Upstream {
             difficulty_config,
             task_collector,
             upstream_channel_manager,
+            shares_per_minute,
         })))
     }
 
@@ -304,10 +307,7 @@ impl Upstream {
     /// 2. A task to periodically check and update the nominal hashrate sent to the upstream based
     ///    on th
     #[allow(clippy::result_large_err)]
-    pub fn parse_incoming(
-        self_: Arc<Mutex<Self>>,
-        upstream_channel_mananger: Arc<Mutex<UpstreamChannelManager>>,
-    ) -> ProxyResult<'static, ()> {
+    pub fn parse_incoming(self_: Arc<Mutex<Self>>) -> ProxyResult<'static, ()> {
         let clone = self_.clone();
         let task_collector = self_.safe_lock(|s| s.task_collector.clone()).unwrap();
         let collector1 = task_collector.clone();
@@ -348,7 +348,6 @@ impl Upstream {
         }
 
         let parse_incoming = tokio::task::spawn(async move {
-            let upstream_channel_manager_clone = upstream_channel_mananger.clone();
             loop {
                 // Waiting to receive a message from the SV2 Upstream role
                 let incoming = handle_result!(tx_status, recv.recv().await);
@@ -388,62 +387,30 @@ impl Upstream {
                     Ok(SendTo::None(Some(m))) => {
                         match m {
                             Mining::OpenExtendedMiningChannelSuccess(m) => {
-                                let prefix_len = m.extranonce_prefix.len();
-                                // update upstream_extranonce1_size for tracking
-                                let miner_extranonce2_size: Result<usize, crate::error::Error<'_>> =
-                                    self_
-                                        .safe_lock(|u| {
-                                            u.upstream_extranonce1_size = prefix_len;
-                                            u.min_extranonce_size as usize
-                                        })
-                                        .map_err(|_e| PoisonLock);
-                                let miner_extranonce2_size =
-                                    handle_result!(tx_status, miner_extranonce2_size);
+                                let extranonce_extended = self_
+                                    .safe_lock(|upstream| {
+                                        let extended_extranonce = upstream
+                                            .upstream_channel_manager
+                                            .safe_lock(|upstream_channel_manager| {
+                                                let downstream_channel_manager =
+                                                    upstream_channel_manager
+                                                        .downstream_managers
+                                                        .get(&m.channel_id)
+                                                        .unwrap();
+                                                downstream_channel_manager
+                                                    .extended_extranonce_factory
+                                                    .clone()
+                                            })
+                                            .unwrap();
+                                        extended_extranonce
+                                    })
+                                    .unwrap();
 
-                                let extranonce_prefix: Extranonce = m.extranonce_prefix.into();
-                                // Create the extended extranonce that will be saved in bridge and
-                                // it will be used to open downstream (sv1) channels
-                                // range 0 is the extranonce1 from upstream
-                                // range 1 is the extranonce1 added by the tproxy
-                                // range 2 is the extranonce2 used by the miner for rolling
-                                // range 0 + range 1 is the extranonce1 sent to the miner
-                                let tproxy_e1_len = super::super::utils::proxy_extranonce1_len(
-                                    m.extranonce_size as usize,
-                                    miner_extranonce2_size,
-                                );
-                                let range_0 = 0..prefix_len; // upstream extranonce1
-                                let range_1 = prefix_len..prefix_len + tproxy_e1_len; // downstream extranonce1
-                                let range_2 = prefix_len + tproxy_e1_len
-                                    ..prefix_len + m.extranonce_size as usize; // extranonce2
-
-                                _ = upstream_channel_manager_clone.safe_lock(|e| {
-                                    e.channel_ids.insert(m.channel_id);
-                                    let downstream_channel_manager = ChannelManager::new(
-                                        extranonce_prefix.clone(),
-                                        prefix_len,
-                                        m.extranonce_size as usize,
-                                        miner_extranonce2_size,
-                                        10.0,
-                                    );
-                                    e.downstream_managers
-                                        .insert(m.channel_id, downstream_channel_manager);
-                                    let upstream_difficulty = UpstreamDifficultyConfig::new(
-                                        60,
-                                        10_000_000_000_000.0,
-                                        0,
-                                        true,
-                                    );
-                                    e.upstream_difficulty
-                                        .insert(m.channel_id, upstream_difficulty)
-                                });
-
-                                let extended = handle_result!(tx_status, ExtendedExtranonce::from_upstream_extranonce(
-                                    extranonce_prefix.clone(), range_0.clone(), range_1.clone(), range_2.clone(),
-                                ).map_err(|err| InvalidExtranonce(format!("Impossible to create a valid extended extranonce from {:?} {:?} {:?} {:?}: {:?}",
-                                    extranonce_prefix, range_0, range_1, range_2, err))));
                                 handle_result!(
                                     tx_status,
-                                    tx_sv2_extranonce.send((extended, m.channel_id)).await
+                                    tx_sv2_extranonce
+                                        .send((extranonce_extended, m.channel_id))
+                                        .await
                                 );
                             }
                             Mining::NewExtendedMiningJob(m) => {
@@ -454,31 +421,14 @@ impl Upstream {
                                     })
                                     .map_err(|_e| PoisonLock);
 
-                                _ = upstream_channel_manager_clone.safe_lock(|u| {
-                                    let channel_manager = u.downstream_managers.get_mut(&m.job_id);
-                                    if let Some(channel_manager) = channel_manager {
-                                        channel_manager.on_new_extended_job(m.clone());
-                                    }
-                                });
-
                                 handle_result!(tx_status, res);
                                 handle_result!(tx_status, tx_sv2_new_ext_mining_job.send(m).await);
                             }
                             Mining::SetNewPrevHash(m) => {
-                                _ = upstream_channel_manager_clone.safe_lock(|u| {
-                                    let channel_manager = u.downstream_managers.get_mut(&m.job_id);
-                                    if let Some(channel_manager) = channel_manager {
-                                        channel_manager.on_new_prev_hash(m.clone());
-                                    }
-                                });
                                 handle_result!(tx_status, tx_sv2_set_new_prev_hash.send(m).await);
                             }
-                            Mining::CloseChannel(m) => {
+                            Mining::CloseChannel(_m) => {
                                 error!("Received Mining::CloseChannel msg from upstream!");
-                                _ = upstream_channel_manager_clone.safe_lock(|u| {
-                                    // Todo improve this.
-                                    u.remove(m.channel_id);
-                                });
                                 handle_result!(tx_status, Err(NoUpstreamsConnected));
                             }
                             Mining::OpenMiningChannelError(_)
@@ -573,7 +523,10 @@ impl Upstream {
                 let mut sv2_submit: SubmitSharesExtended =
                     handle_result!(tx_status, receiver.recv().await);
 
-                let channel_id = self_
+                let channel_id: Result<
+                    Result<u32, crate::error::Error<'_>>,
+                    crate::error::Error<'_>,
+                > = self_
                     .safe_lock(|s| {
                         s.channel_id
                             .ok_or(super::super::error::Error::RolesSv2Logic(

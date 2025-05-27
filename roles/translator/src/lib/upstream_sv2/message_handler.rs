@@ -11,7 +11,10 @@ use roles_logic_sv2::{
 };
 use tracing::info;
 
-use crate::{downstream_sv1::Downstream, upstream_sv2::upstream::IS_NEW_JOB_HANDLED};
+use crate::{
+    channel_manager::ChannelManager, downstream_sv1::Downstream,
+    upstream_sv2::upstream::IS_NEW_JOB_HANDLED,
+};
 
 use tracing::{debug, error, warn};
 
@@ -160,6 +163,29 @@ impl ParseMiningMessagesFromUpstream<Downstream> for Upstream {
         info!("Up: Successfully Opened Extended Mining Channel");
         self.channel_id = Some(m.channel_id);
         self.extranonce_prefix = Some(m.extranonce_prefix.to_vec());
+
+        _ = self.upstream_channel_manager.safe_lock(|e| {
+            info!("Updating upstream channel manager state with new upstream connection");
+
+            e.channel_ids.insert(m.channel_id);
+            let downstream_channel_manager = ChannelManager::new(
+                m.extranonce_prefix.clone().into(),
+                m.extranonce_prefix.to_vec().len(),
+                m.extranonce_size as usize,
+                self.min_extranonce_size as usize,
+                self.shares_per_minute,
+            );
+            e.downstream_managers
+                .insert(m.channel_id, downstream_channel_manager);
+            // Remove this unwrap from here, this can be handled better.
+            let upstream_difficulty = self
+                .difficulty_config
+                .safe_lock(|upstream| upstream.clone())
+                .unwrap();
+            e.upstream_difficulty
+                .insert(m.channel_id, upstream_difficulty)
+        })?;
+
         let m = Mining::OpenExtendedMiningChannelSuccess(m.into_static());
         Ok(SendTo::None(Some(m)))
     }
@@ -177,7 +203,6 @@ impl ParseMiningMessagesFromUpstream<Downstream> for Upstream {
             m.as_static(),
         ))))
     }
-
     /// Handles the SV2 `UpdateChannelError` message (TODO).
     fn handle_update_channel_error(
         &mut self,
@@ -198,6 +223,12 @@ impl ParseMiningMessagesFromUpstream<Downstream> for Upstream {
         m: roles_logic_sv2::mining_sv2::CloseChannel,
     ) -> Result<SendTo<Downstream>, RolesLogicError> {
         info!("Received CloseChannel for channel id: {}", m.channel_id);
+
+        self.upstream_channel_manager.safe_lock(|u| {
+            // Todo improve this.
+            u.remove(m.channel_id);
+        })?;
+
         Ok(SendTo::None(Some(Mining::CloseChannel(m.as_static()))))
     }
 
@@ -255,6 +286,14 @@ impl ParseMiningMessagesFromUpstream<Downstream> for Upstream {
             m.is_future()
         );
         debug!("NewExtendedMiningJob: {:?}", m);
+
+        self.upstream_channel_manager.safe_lock(|u| {
+            let channel_manager = u.downstream_managers.get_mut(&m.channel_id);
+            if let Some(channel_manager) = channel_manager {
+                channel_manager.on_new_extended_job(m.clone().as_static());
+            }
+        })?;
+
         if self.is_work_selection_enabled() {
             Ok(SendTo::None(None))
         } else {
@@ -281,6 +320,14 @@ impl ParseMiningMessagesFromUpstream<Downstream> for Upstream {
             "Received SetNewPrevHash channel id: {}, job id: {}",
             m.channel_id, m.job_id
         );
+
+        self.upstream_channel_manager.safe_lock(|u| {
+            let channel_manager = u.downstream_managers.get_mut(&m.channel_id);
+            if let Some(channel_manager) = channel_manager {
+                channel_manager.on_new_prev_hash(m.clone().as_static());
+            }
+        })?;
+
         debug!("SetNewPrevHash: {:?}", m);
         if self.is_work_selection_enabled() {
             Ok(SendTo::None(None))

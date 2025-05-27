@@ -236,6 +236,7 @@ impl TranslatorSv2 {
             diff_config.clone(),                         // Shares difficulty config
             task_collector_upstream,
             upstream_channel_manager.clone(),
+            proxy_config.downstream_difficulty_config.shares_per_minute,
         )
         .await
         {
@@ -269,10 +270,7 @@ impl TranslatorSv2 {
             }
 
             // Start the task to parse incoming messages from the Upstream.
-            if let Err(e) = upstream_sv2::Upstream::parse_incoming(
-                upstream.clone(),
-                upstream_channel_manager.clone(),
-            ) {
+            if let Err(e) = upstream_sv2::Upstream::parse_incoming(upstream.clone()) {
                 error!("failed to create sv2 parser: {}", e);
                 return;
             }

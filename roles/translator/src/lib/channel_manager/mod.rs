@@ -26,7 +26,7 @@ use stratum_common::bitcoin::{
     transaction::TxOut,
     CompactTarget, Target as BitcoinTarget,
 };
-use tracing::debug;
+use tracing::{debug, info};
 use v1::utils::HexU32Be;
 
 use crate::{
@@ -209,7 +209,7 @@ impl ChannelManager {
     /// Then share the result to downstream and upstream (if accepted)
     /// Check against active and past jobs.
     pub fn on_submit_share(&mut self, share: SubmitShareWithChannelId) -> bool {
-        debug!("Got submit share message in channel manager");
+        info!("Got submit share message in channel manager");
         let job_id = share.share.job_id.parse::<u32>().unwrap();
         match self.active_job.clone() {
             Some(active_job) => {
@@ -232,7 +232,7 @@ impl ChannelManager {
         share: SubmitShareWithChannelId,
         job: Option<NewExtendedMiningJob<'static>>,
     ) -> bool {
-        debug!("Got share {share:?}, for this job {job:?} in channel manager");
+        info!("Got share {share:?}, for this job {job:?} in channel manager");
 
         let job_id = share.share.job_id;
 
@@ -340,7 +340,7 @@ impl ChannelManager {
     }
 
     pub fn on_new_prev_hash(&mut self, set_new_prevhash: SetNewPrevHash<'static>) {
-        debug!("Received new previous block hash in channel manager: {set_new_prevhash:?}");
+        info!("Received new previous block hash in channel manager: {set_new_prevhash:?}");
         let job_id = set_new_prevhash.job_id;
         self.active_job = None;
         if self.future_jobs.contains_key(&job_id) {
@@ -353,7 +353,7 @@ impl ChannelManager {
     }
 
     pub fn on_new_extended_job(&mut self, extended_job: NewExtendedMiningJob<'static>) {
-        debug!("Received extended mining job in channel manager: {extended_job:?}");
+        info!("Received extended mining job in channel manager: {extended_job:?}");
         if extended_job.is_future() {
             self.future_jobs.insert(extended_job.job_id, extended_job);
             return;
