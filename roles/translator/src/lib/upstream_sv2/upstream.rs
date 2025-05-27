@@ -43,7 +43,6 @@ use roles_logic_sv2::{
     },
     parsers::Mining,
     utils::Mutex,
-    Error as RolesLogicError,
     Error::NoUpstreamsConnected,
 };
 use std::{
@@ -84,8 +83,6 @@ pub struct Upstream {
     /// Newly assigned identifier of the channel, stable for the whole lifetime of the connection,
     /// e.g. it is used for broadcasting new jobs by the `NewExtendedMiningJob` message.
     pub(super) channel_id: Option<u32>,
-    /// Identifier of the job as provided by the `NewExtendedMiningJob` message.
-    job_id: Option<u32>,
     /// Bytes used as implicit first part of `extranonce`.
     pub(super) extranonce_prefix: Option<Vec<u8>>,
     /// Represents a connection to a SV2 Upstream role.
@@ -189,7 +186,6 @@ impl Upstream {
             tx_sv2_set_new_prev_hash,
             tx_sv2_new_ext_mining_job,
             channel_id: None,
-            job_id: None,
             min_extranonce_size,
             upstream_extranonce1_size: 16, /* 16 is the default since that is the only value the
                                             * pool supports currently */
@@ -371,14 +367,6 @@ impl Upstream {
                                 info!("Open extended mining channel success received");
                             }
                             Mining::NewExtendedMiningJob(m) => {
-                                let job_id = m.job_id;
-                                let res = self_
-                                    .safe_lock(|s| {
-                                        let _ = s.job_id.insert(job_id);
-                                    })
-                                    .map_err(|_e| PoisonLock);
-
-                                handle_result!(tx_status, res);
                                 handle_result!(tx_status, tx_sv2_new_ext_mining_job.send(m).await);
                             }
                             Mining::SetNewPrevHash(m) => {
@@ -429,26 +417,6 @@ impl Upstream {
         Ok(())
     }
 
-    // Retrieves the current job ID.
-    //
-    // If work selection is enabled (which it is not for a Translator Proxy),
-    // it would return the last `SetCustomMiningJobSuccess` job ID. If
-    // work selection is disabled, it returns the job ID from the last
-    // `NewExtendedMiningJob`
-    #[allow(clippy::result_large_err)]
-    fn get_job_id(
-        self_: &Arc<Mutex<Self>>,
-    ) -> Result<Result<u32, super::super::error::Error<'static>>, super::super::error::Error<'static>>
-    {
-        self_
-            .safe_lock(|s| {
-                s.job_id.ok_or(super::super::error::Error::RolesSv2Logic(
-                    RolesLogicError::NoValidJob,
-                ))
-            })
-            .map_err(|_e| PoisonLock)
-    }
-
     /// Spawns a task to handle outgoing `SubmitSharesExtended` messages.
     ///
     /// This task continuously receives `SubmitSharesExtended` messages from the
@@ -470,24 +438,8 @@ impl Upstream {
 
         let handle_submit = tokio::task::spawn(async move {
             loop {
-                let mut sv2_submit: SubmitSharesExtended =
+                let sv2_submit: SubmitSharesExtended =
                     handle_result!(tx_status, receiver.recv().await);
-
-                let channel_id: Result<
-                    Result<u32, crate::error::Error<'_>>,
-                    crate::error::Error<'_>,
-                > = self_
-                    .safe_lock(|s| {
-                        s.channel_id
-                            .ok_or(super::super::error::Error::RolesSv2Logic(
-                                RolesLogicError::NotFoundChannelId,
-                            ))
-                    })
-                    .map_err(|_e| PoisonLock);
-                sv2_submit.channel_id =
-                    handle_result!(tx_status, handle_result!(tx_status, channel_id));
-                let job_id = Self::get_job_id(&self_);
-                sv2_submit.job_id = handle_result!(tx_status, handle_result!(tx_status, job_id));
 
                 let message = Message::Mining(
                     roles_logic_sv2::parsers::Mining::SubmitSharesExtended(sv2_submit),
