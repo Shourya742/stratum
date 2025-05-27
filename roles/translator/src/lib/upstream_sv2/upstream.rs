@@ -19,7 +19,6 @@
 
 use crate::{
     channel_manager::UpstreamChannelManager,
-    config::UpstreamDifficultyConfig,
     error::{
         Error::{CodecNoise, PoisonLock, UpstreamIncoming},
         ProxyResult,
@@ -56,22 +55,10 @@ use tokio::{
 };
 use tracing::{error, info};
 
-use stratum_common::bitcoin::BlockHash;
-
 /// Atomic boolean flag used for synchronization between receiving a new job
 /// and handling a new previous hash. Indicates whether a `NewExtendedMiningJob`
 /// has been fully processed.
 pub static IS_NEW_JOB_HANDLED: AtomicBool = AtomicBool::new(true);
-/// Represents the currently active `prevhash` of the mining job being worked on OR being submitted
-/// from the Downstream role.
-#[derive(Debug, Clone)]
-#[allow(dead_code)]
-struct PrevHash {
-    /// `prevhash` of mining job.
-    prev_hash: BlockHash,
-    /// `nBits` encoded difficulty target.
-    nbits: u32,
-}
 
 /// Represents a connection to a single SV2 Upstream role.
 ///
@@ -94,24 +81,8 @@ pub struct Upstream {
     /// This allows the upstream threads to be able to communicate back to the main thread its
     /// current status.
     tx_status: status::Sender,
-    /// The first `target` is received by the Upstream role in the SV2
-    /// `OpenExtendedMiningChannelSuccess` message, then updated periodically via SV2 `SetTarget`
-    /// messages. Passed to the `Downstream` on connection creation and sent to the Downstream role
-    /// via the SV1 `mining.set_difficulty` message.
-    pub(super) target: Arc<Mutex<Vec<u8>>>,
-    /// Minimum `extranonce2` size. Initially requested in the `proxy-config.toml`, and ultimately
-    /// set by the SV2 Upstream via the SV2 `OpenExtendedMiningChannelSuccess` message.
-    pub min_extranonce_size: u16,
-    /// The size of the extranonce1 provided by the upstream role.
-    pub upstream_extranonce1_size: usize,
-    // values used to update the channel with the correct nominal hashrate.
-    // each Downstream instance will add and subtract their hashrates as needed
-    // and the upstream just needs to occasionally check if it has changed more than
-    // than the configured percentage
-    pub(super) difficulty_config: Arc<Mutex<UpstreamDifficultyConfig>>,
     task_collector: Arc<Mutex<Vec<(AbortHandle, String)>>>,
     pub(super) upstream_channel_manager: Arc<Mutex<UpstreamChannelManager>>,
-    pub(super) shares_per_minute: f32,
 }
 
 impl Upstream {
@@ -127,13 +98,9 @@ impl Upstream {
         rx_sv2_submit_shares_ext: Receiver<SubmitSharesExtended<'static>>,
         tx_sv2_set_new_prev_hash: Sender<SetNewPrevHash<'static>>,
         tx_sv2_new_ext_mining_job: Sender<NewExtendedMiningJob<'static>>,
-        min_extranonce_size: u16,
         tx_status: status::Sender,
-        target: Arc<Mutex<Vec<u8>>>,
-        difficulty_config: Arc<Mutex<UpstreamDifficultyConfig>>,
         task_collector: Arc<Mutex<Vec<(AbortHandle, String)>>>,
         upstream_channel_manager: Arc<Mutex<UpstreamChannelManager>>,
-        shares_per_minute: f32,
     ) -> ProxyResult<'static, Arc<Mutex<Self>>> {
         // Connect to the SV2 Upstream role retry connection every 5 seconds.
         let socket = loop {
@@ -171,15 +138,9 @@ impl Upstream {
             rx_sv2_submit_shares_ext,
             tx_sv2_set_new_prev_hash,
             tx_sv2_new_ext_mining_job,
-            min_extranonce_size,
-            upstream_extranonce1_size: 16, /* 16 is the default since that is the only value the
-                                            * pool supports currently */
             tx_status,
-            target,
-            difficulty_config,
             task_collector,
             upstream_channel_manager,
-            shares_per_minute,
         })))
     }
 
@@ -235,30 +196,21 @@ impl Upstream {
         )?;
 
         // Send open channel request before returning
-        let nominal_hash_rate = self_.safe_lock(|u| {
-            u.difficulty_config
-                .safe_lock(|c| c.channel_nominal_hashrate)
+        let (nominal_hash_rate, min_extranonce_size) = self_.safe_lock(|u| {
+            u.upstream_channel_manager
+                .safe_lock(|u| (u.bootstrap_nominal_hashrate, u.min_extranonce_size))
                 .map_err(|_e| PoisonLock)
         })??;
         let user_identity = "ABC".to_string().try_into()?;
 
-        // Get the min_extranonce_size from the instance
-        let min_extranonce_size = self_.safe_lock(|u: &mut Upstream| u.min_extranonce_size)?;
-
-        let open_channel = Mining::OpenExtendedMiningChannel(OpenExtendedMiningChannel {
-            request_id: 0, // TODO
-            user_identity, // TODO
-            nominal_hash_rate,
-            max_target: u256_from_int(u64::MAX), // TODO
-            min_extranonce_size,
-        });
-
-        // reset channel hashrate so downstreams can manage from now on out
-        self_.safe_lock(|u| {
-            u.difficulty_config
-                .safe_lock(|d| d.channel_nominal_hashrate = 0.0)
-                .map_err(|_e| PoisonLock)
-        })??;
+        let open_channel: Mining<'_> =
+            Mining::OpenExtendedMiningChannel(OpenExtendedMiningChannel {
+                request_id: 0, // TODO
+                user_identity, // TODO
+                nominal_hash_rate,
+                max_target: u256_from_int(u64::MAX), // TODO
+                min_extranonce_size,
+            });
 
         let sv2_frame: StdFrame = Message::Mining(open_channel).try_into()?;
         connection.send(sv2_frame).await?;

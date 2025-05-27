@@ -74,9 +74,6 @@ impl TranslatorSv2 {
         // Status channel for components to signal errors or state changes.
         let (tx_status, rx_status) = unbounded();
 
-        // Shared mutable state for the current mining target.
-        let target = Arc::new(Mutex::new(vec![0; 32]));
-
         // Broadcast channel to send SV1 `mining.notify` messages from the Bridge
         // to all connected Downstream (SV1) clients.
         let (tx_sv1_notify, _rx_sv1_notify): (
@@ -93,7 +90,6 @@ impl TranslatorSv2 {
         Self::internal_start(
             self.config.clone(),
             tx_sv1_notify.clone(),
-            target.clone(),
             tx_status.clone(),
             task_collector.clone(),
         )
@@ -135,7 +131,6 @@ impl TranslatorSv2 {
                                 error!("Trying to reconnect the Upstream because of: {}", err);
                                 let task_collector1 = task_collector_.clone();
                                 let tx_sv1_notify1 = tx_sv1_notify.clone();
-                                let target = target.clone();
                                 let tx_status = tx_status.clone();
                                 let proxy_config = self.config.clone();
                                 // Spawn a new task to handle the reconnection process.
@@ -152,7 +147,6 @@ impl TranslatorSv2 {
                                     Self::internal_start(
                                         proxy_config,
                                         tx_sv1_notify1,
-                                        target.clone(),
                                         tx_status.clone(),
                                         task_collector1,
                                     )
@@ -191,7 +185,6 @@ impl TranslatorSv2 {
     async fn internal_start(
         proxy_config: TranslatorConfig,
         tx_sv1_notify: broadcast::Sender<server_to_client::Notify<'static>>,
-        target: Arc<Mutex<Vec<u8>>>,
         tx_status: async_channel::Sender<Status<'static>>,
         task_collector: Arc<Mutex<Vec<(AbortHandle, String)>>>,
     ) {
@@ -213,26 +206,31 @@ impl TranslatorSv2 {
                 .expect("Failed to parse upstream address!"),
             proxy_config.upstream_port,
         );
-
-        let upstream_channel_manager = Arc::new(Mutex::new(UpstreamChannelManager::new()));
-
         // Shared difficulty configuration
         let diff_config = Arc::new(Mutex::new(proxy_config.upstream_difficulty_config.clone()));
+
+        let upstream_channel_manager = Arc::new(Mutex::new(UpstreamChannelManager::new(
+            proxy_config.min_extranonce2_size,
+            proxy_config
+                .upstream_difficulty_config
+                .channel_nominal_hashrate,
+            proxy_config
+                .upstream_difficulty_config
+                .channel_diff_update_interval,
+            proxy_config.downstream_difficulty_config.shares_per_minute,
+        )));
+
         let task_collector_upstream = task_collector.clone();
         // Instantiate the Upstream (SV2) component.
         let upstream = match upstream_sv2::Upstream::new(
             upstream_addr,
             proxy_config.upstream_authority_pubkey,
-            rx_sv2_submit_shares_ext,          // Receives shares from Bridge
-            tx_sv2_set_new_prev_hash,          // Sends prev hash updates to Bridge
-            tx_sv2_new_ext_mining_job,         // Sends new jobs to Bridge
-            proxy_config.min_extranonce2_size, // Sends initial extranonce
-            status::Sender::Upstream(tx_status.clone()), // Sends status updates
-            target.clone(),                    // Shares target state
-            diff_config.clone(),               // Shares difficulty config
+            rx_sv2_submit_shares_ext,  // Receives shares from Bridge
+            tx_sv2_set_new_prev_hash,  // Sends prev hash updates to Bridge
+            tx_sv2_new_ext_mining_job, // Sends new jobs to Bridge
+            status::Sender::Upstream(tx_status.clone()), // Shares target state
             task_collector_upstream,
             upstream_channel_manager.clone(),
-            proxy_config.downstream_difficulty_config.shares_per_minute,
         )
         .await
         {

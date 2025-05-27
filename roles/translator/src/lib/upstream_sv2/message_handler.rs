@@ -9,7 +9,7 @@ use roles_logic_sv2::{
 use tracing::info;
 
 use crate::{
-    channel_manager::ChannelManager, downstream_sv1::Downstream,
+    channel_manager::ChannelManager, config::UpstreamDifficultyConfig, downstream_sv1::Downstream,
     upstream_sv2::upstream::IS_NEW_JOB_HANDLED,
 };
 
@@ -109,18 +109,22 @@ impl ParseMiningMessagesFromUpstream<Downstream> for Upstream {
             "Received OpenExtendedMiningChannelSuccess with request id: {} and channel id: {}",
             m.request_id, m.channel_id
         );
+
+        let min_extranonce_size = self
+            .upstream_channel_manager
+            .safe_lock(|u| u.min_extranonce_size)?;
+
         debug!("OpenStandardMiningChannelSuccess: {:?}", m);
         let tproxy_e1_len = super::super::utils::proxy_extranonce1_len(
             m.extranonce_size as usize,
-            self.min_extranonce_size.into(),
+            min_extranonce_size.into(),
         ) as u16;
-        if self.min_extranonce_size + tproxy_e1_len < m.extranonce_size {
+        if min_extranonce_size + tproxy_e1_len < m.extranonce_size {
             return Err(RolesLogicError::InvalidExtranonceSize(
-                self.min_extranonce_size,
+                min_extranonce_size,
                 m.extranonce_size,
             ));
         }
-        self.target.safe_lock(|t| *t = m.target.to_vec())?;
 
         info!("Up: Successfully Opened Extended Mining Channel");
 
@@ -132,20 +136,25 @@ impl ParseMiningMessagesFromUpstream<Downstream> for Upstream {
                 m.extranonce_prefix.clone().into(),
                 m.extranonce_prefix.to_vec().len(),
                 m.extranonce_size as usize,
-                self.min_extranonce_size as usize,
-                self.shares_per_minute,
+                min_extranonce_size as usize,
+                e.shares_per_minute,
                 m.channel_id,
             );
-            // Remove this unwrap from here, this can be handled better.
-            let upstream_difficulty = self
-                .difficulty_config
-                .safe_lock(|upstream| upstream.clone())
-                .unwrap();
-            let upstream_channel = e.upstream_manager.get_mut(&m.channel_id);
+
+            let upstream_difficulty = UpstreamDifficultyConfig {
+                channel_nominal_hashrate: 0.0,
+                channel_diff_update_interval: e.update_interval,
+                should_aggregate: true,
+                timestamp_of_last_update: 0,
+            };
+
+            let upstream_channel: Option<&mut crate::channel_manager::UpstreamChannel> =
+                e.upstream_manager.get_mut(&m.channel_id);
             if let Some(upstream_channel) = upstream_channel {
                 upstream_channel.downstream_manager = downstream_channel_manager;
                 upstream_channel.last_sent_hashrate = upstream_difficulty.channel_nominal_hashrate;
                 upstream_channel.upstream_difficulty = upstream_difficulty;
+                upstream_channel.target = m.target.clone().into();
             };
         })?;
 
@@ -335,7 +344,13 @@ impl ParseMiningMessagesFromUpstream<Downstream> for Upstream {
         info!("Received SetTarget for channel id: {}", m.channel_id);
         debug!("SetTarget: {:?}", m);
         let m = m.into_static();
-        self.target.safe_lock(|t| *t = m.maximum_target.to_vec())?;
+        self.upstream_channel_manager
+            .safe_lock(|upstream_channel| {
+                let upstream_channel = upstream_channel.upstream_manager.get_mut(&m.channel_id);
+                if let Some(upstream_channel) = upstream_channel {
+                    upstream_channel.target = m.maximum_target.into();
+                }
+            })?;
         Ok(SendTo::None(None))
     }
 

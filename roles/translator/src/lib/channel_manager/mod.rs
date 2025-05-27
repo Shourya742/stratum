@@ -76,6 +76,10 @@ pub struct UpstreamChannelManager {
     pub channel_ids: HashSet<u32>,
     pub upstream_manager: HashMap<u32, UpstreamChannel>,
     pub aggregate: bool,
+    pub min_extranonce_size: u16,
+    pub bootstrap_nominal_hashrate: f32,
+    pub update_interval: u32,
+    pub shares_per_minute: f32,
 }
 
 #[derive(Debug)]
@@ -87,11 +91,20 @@ pub struct UpstreamChannel {
 }
 
 impl UpstreamChannelManager {
-    pub fn new() -> Self {
+    pub fn new(
+        min_extranonce_size: u16,
+        bootstrap_nominal_hashrate: f32,
+        update_interval: u32,
+        shares_per_minute: f32,
+    ) -> Self {
         Self {
             channel_ids: HashSet::new(),
             upstream_manager: HashMap::new(),
             aggregate: true,
+            min_extranonce_size,
+            bootstrap_nominal_hashrate,
+            update_interval,
+            shares_per_minute,
         }
     }
 
