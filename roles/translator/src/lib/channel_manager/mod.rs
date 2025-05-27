@@ -90,6 +90,22 @@ pub struct UpstreamChannel {
     pub target: Target,
 }
 
+impl UpstreamChannel {
+    pub fn new(
+        downstream_manager: ChannelManager,
+        last_sent_hashrate: f32,
+        upstream_difficulty: UpstreamDifficultyConfig,
+        target: Target,
+    ) -> Self {
+        Self {
+            downstream_manager,
+            last_sent_hashrate,
+            upstream_difficulty,
+            target,
+        }
+    }
+}
+
 impl UpstreamChannelManager {
     pub fn new(
         min_extranonce_size: u16,

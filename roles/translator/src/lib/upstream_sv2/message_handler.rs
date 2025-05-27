@@ -9,7 +9,9 @@ use roles_logic_sv2::{
 use tracing::info;
 
 use crate::{
-    channel_manager::ChannelManager, config::UpstreamDifficultyConfig, downstream_sv1::Downstream,
+    channel_manager::{ChannelManager, UpstreamChannel},
+    config::UpstreamDifficultyConfig,
+    downstream_sv1::Downstream,
     upstream_sv2::upstream::IS_NEW_JOB_HANDLED,
 };
 
@@ -148,14 +150,13 @@ impl ParseMiningMessagesFromUpstream<Downstream> for Upstream {
                 timestamp_of_last_update: 0,
             };
 
-            let upstream_channel: Option<&mut crate::channel_manager::UpstreamChannel> =
-                e.upstream_manager.get_mut(&m.channel_id);
-            if let Some(upstream_channel) = upstream_channel {
-                upstream_channel.downstream_manager = downstream_channel_manager;
-                upstream_channel.last_sent_hashrate = upstream_difficulty.channel_nominal_hashrate;
-                upstream_channel.upstream_difficulty = upstream_difficulty;
-                upstream_channel.target = m.target.clone().into();
-            };
+            let upstream_channel = UpstreamChannel::new(
+                downstream_channel_manager,
+                upstream_difficulty.channel_nominal_hashrate,
+                upstream_difficulty,
+                m.target.clone().into(),
+            );
+            e.upstream_manager.insert(m.channel_id, upstream_channel);
         })?;
 
         let m = Mining::OpenExtendedMiningChannelSuccess(m.into_static());

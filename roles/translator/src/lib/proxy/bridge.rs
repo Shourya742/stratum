@@ -36,7 +36,7 @@ use roles_logic_sv2::{
 };
 use std::sync::Arc;
 use tokio::{sync::broadcast, task::AbortHandle};
-use tracing::debug;
+use tracing::{debug, info};
 use v1::{client_to_server::Submit, server_to_client, utils::HexU32Be};
 
 /// Bridge between the SV2 `Upstream` and SV1 `Downstream` responsible for the following messaging
@@ -110,6 +110,7 @@ impl Bridge {
                 if upstream_channel_manager.aggregate {
                     // In this case we already know that, we gonna have a single downstream
                     // channel manager whose job is gonna be to aggregate downstream miners.
+                    info!("Received new downstream sv1 connection, number of upstream channels: {:?}", upstream_channel_manager.upstream_manager.len());
 
                     if let Some(upstream_manager) = upstream_channel_manager
                         .upstream_manager
@@ -120,9 +121,11 @@ impl Bridge {
                             upstream_manager
                                 .downstream_manager
                                 .on_new_downstream_connection("dummy".into());
+                        debug!("{channel_id:?}, {connection_id:?}, {extranonce:?}, {extranonce2_len:?}");
                         let active_job = upstream_manager.downstream_manager.active_job.clone();
                         let prev_hash = upstream_manager.downstream_manager.prev_block_hash.clone();
                         if let Some(active_job) = active_job {
+                            debug!("Active Job: {active_job:?}");
                             let result = prev_hash.map(|m| {
                                 let last_notify = create_notify(m, active_job, true);
                                 OpenSv1Downstream {
