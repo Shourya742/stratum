@@ -51,6 +51,12 @@ pub struct TranslatorSv2 {
     shutdown: Arc<Notify>,
 }
 
+#[derive(Clone, Debug)]
+pub struct OpenConnection {
+    pub request_id: u32,
+    pub user_identity: String,
+}
+
 impl TranslatorSv2 {
     /// Creates a new `TranslatorSv2`.
     ///
@@ -200,6 +206,8 @@ impl TranslatorSv2 {
         // Channel: Upstream -> Bridge (SV2 SetNewPrevHash)
         let (tx_sv2_set_new_prev_hash, rx_sv2_set_new_prev_hash) = bounded(10);
 
+        let (tx_open_upstream_channel, rx_open_upstream_channel) = bounded::<OpenConnection>(10);
+
         // Prepare upstream connection address.
         let upstream_addr = SocketAddr::new(
             IpAddr::from_str(&proxy_config.upstream_address)
@@ -229,6 +237,9 @@ impl TranslatorSv2 {
             status::Sender::Upstream(tx_status.clone()), // Shares target state
             task_collector_upstream,
             upstream_channel_manager.clone(),
+            proxy_config.min_supported_version,
+            proxy_config.max_supported_version,
+            rx_open_upstream_channel,
         )
         .await
         {
@@ -246,21 +257,7 @@ impl TranslatorSv2 {
         // even during potentially long-running connection attempts.
         let task = task::spawn(async move {
             // Connect to the SV2 Upstream role
-            match upstream_sv2::Upstream::connect(
-                upstream.clone(),
-                proxy_config.min_supported_version,
-                proxy_config.max_supported_version,
-            )
-            .await
-            {
-                Ok(_) => info!("Connected to Upstream!"),
-                Err(e) => {
-                    // FIXME: Send error to status main loop, and then exit.
-                    error!("Failed to connect to Upstream EXITING! : {}", e);
-                    return;
-                }
-            }
-
+            _ = upstream_sv2::Upstream::connect(upstream.clone()).await;
             // Start the task to parse incoming messages from the Upstream.
             if let Err(e) = upstream_sv2::Upstream::parse_incoming(upstream.clone()) {
                 error!("failed to create sv2 parser: {}", e);
@@ -285,6 +282,8 @@ impl TranslatorSv2 {
                 status::Sender::Bridge(tx_status.clone()),
                 task_collector_bridge,
                 upstream_channel_manager.clone(),
+                tx_open_upstream_channel,
+                true,
             );
             // Start the Bridge's main processing loop.
             proxy::Bridge::start(b.clone());

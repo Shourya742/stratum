@@ -116,7 +116,7 @@ impl ParseMiningMessagesFromUpstream<Downstream> for Upstream {
             .upstream_channel_manager
             .safe_lock(|u| u.min_extranonce_size)?;
 
-        debug!("OpenStandardMiningChannelSuccess: {:?}", m);
+        debug!("OpenExtendedMiningChannelSuccess: {:?}", m);
         let tproxy_e1_len = super::super::utils::proxy_extranonce1_len(
             m.extranonce_size as usize,
             min_extranonce_size.into(),
@@ -157,6 +157,8 @@ impl ParseMiningMessagesFromUpstream<Downstream> for Upstream {
                 m.target.clone().into(),
             );
             e.upstream_manager.insert(m.channel_id, upstream_channel);
+            e.request_id_to_channel_id
+                .insert(m.request_id, m.channel_id);
         })?;
 
         let m = Mining::OpenExtendedMiningChannelSuccess(m.into_static());

@@ -358,13 +358,12 @@ impl Downstream {
                 let listener = TcpListener::bind(downstream_addr).await.unwrap();
 
                 while let Ok((stream, _)) = listener.accept().await {
-                    let open_sv1_downstream =
-                        bridge.safe_lock(|s| s.on_new_sv1_connection()).unwrap();
-
+                    let mut bridge = bridge.safe_lock(|s| s.clone()).unwrap();
+                    let open_sv1_downstream = bridge.on_new_sv1_connection().await;
                     let host = stream.peer_addr().unwrap().to_string();
 
                     match open_sv1_downstream {
-                        Ok(Some(opened)) => {
+                        Some(opened) => {
                             info!("PROXY SERVER - ACCEPTING FROM DOWNSTREAM: {}", host);
                             Downstream::new_downstream(
                                 stream,
@@ -382,7 +381,7 @@ impl Downstream {
                             )
                             .await;
                         }
-                        Err(_) | Ok(None) => {
+                        None => {
                             tracing::error!("Failed to create a new downstream connection",);
                         }
                     }

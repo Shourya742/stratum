@@ -25,6 +25,7 @@ use crate::{
     },
     status,
     upstream_sv2::{EitherFrame, Message, StdFrame, UpstreamConnection},
+    OpenConnection,
 };
 use async_channel::{Receiver, Sender};
 use binary_sv2::u256_from_int;
@@ -53,7 +54,7 @@ use tokio::{
     task::AbortHandle,
     time::{sleep, Duration},
 };
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 /// Atomic boolean flag used for synchronization between receiving a new job
 /// and handling a new previous hash. Indicates whether a `NewExtendedMiningJob`
@@ -83,6 +84,7 @@ pub struct Upstream {
     tx_status: status::Sender,
     task_collector: Arc<Mutex<Vec<(AbortHandle, String)>>>,
     pub(super) upstream_channel_manager: Arc<Mutex<UpstreamChannelManager>>,
+    rx_open_upstream_channel: Receiver<OpenConnection>,
 }
 
 impl Upstream {
@@ -101,6 +103,9 @@ impl Upstream {
         tx_status: status::Sender,
         task_collector: Arc<Mutex<Vec<(AbortHandle, String)>>>,
         upstream_channel_manager: Arc<Mutex<UpstreamChannelManager>>,
+        min_version: u16,
+        max_version: u16,
+        rx_open_upstream_channel: Receiver<OpenConnection>,
     ) -> ProxyResult<'static, Arc<Mutex<Self>>> {
         // Connect to the SV2 Upstream role retry connection every 5 seconds.
         let socket = loop {
@@ -131,34 +136,10 @@ impl Upstream {
             .unwrap();
         // Initialize `UpstreamConnection` with channel for SV2 Upstream role communication and
         // channel for downstream Translator Proxy communication
-        let connection = UpstreamConnection { receiver, sender };
+        let mut connection = UpstreamConnection { receiver, sender };
 
-        Ok(Arc::new(Mutex::new(Self {
-            connection,
-            rx_sv2_submit_shares_ext,
-            tx_sv2_set_new_prev_hash,
-            tx_sv2_new_ext_mining_job,
-            tx_status,
-            task_collector,
-            upstream_channel_manager,
-        })))
-    }
-
-    /// Performs the SV2 connection setup handshake with the Upstream role.
-    ///
-    /// Sends a `SetupConnection` message specifying supported protocol versions
-    /// and flags. Waits for the upstream to respond with either `SetupConnectionSuccess`
-    /// or `SetupConnectionError`.Upon successful setup, it then sends an
-    /// `OpenExtendedMiningChannel` request to establish a mining channel, including the
-    /// negotiated minimum extranonce size and initial nominal hashrate.
-    pub async fn connect(
-        self_: Arc<Mutex<Self>>,
-        min_version: u16,
-        max_version: u16,
-    ) -> ProxyResult<'static, ()> {
         // Get the `SetupConnection` message with Mining Device information (currently hard coded)
         let setup_connection = Self::get_setup_connection_message(min_version, max_version, false)?;
-        let mut connection = self_.safe_lock(|s| s.connection.clone())?;
 
         // Put the `SetupConnection` message in a `StdFrame` to be sent over the wire
         let sv2_frame: StdFrame = Message::Common(setup_connection.into()).try_into()?;
@@ -187,33 +168,80 @@ impl Upstream {
         // Gets the message payload
         let payload = incoming.payload();
 
+        let upstream = Arc::new(Mutex::new(Self {
+            connection,
+            rx_sv2_submit_shares_ext,
+            tx_sv2_set_new_prev_hash,
+            tx_sv2_new_ext_mining_job,
+            tx_status,
+            task_collector,
+            upstream_channel_manager,
+            rx_open_upstream_channel,
+        }));
+
         // Handle the incoming message (should be either `SetupConnectionSuccess` or
         // `SetupConnectionError`)
         ParseCommonMessagesFromUpstream::handle_message_common(
-            self_.clone(),
+            upstream.clone(),
             message_type,
             payload,
         )?;
 
-        // Send open channel request before returning
-        let (nominal_hash_rate, min_extranonce_size) = self_.safe_lock(|u| {
-            u.upstream_channel_manager
-                .safe_lock(|u| (u.bootstrap_nominal_hashrate, u.min_extranonce_size))
-                .map_err(|_e| PoisonLock)
-        })??;
-        let user_identity = "ABC".to_string().try_into()?;
+        Ok(upstream)
+    }
 
-        let open_channel: Mining<'_> =
-            Mining::OpenExtendedMiningChannel(OpenExtendedMiningChannel {
-                request_id: 0, // TODO
-                user_identity, // TODO
-                nominal_hash_rate,
-                max_target: u256_from_int(u64::MAX), // TODO
-                min_extranonce_size,
-            });
+    /// Performs the SV2 connection setup handshake with the Upstream role.
+    ///
+    /// Sends a `SetupConnection` message specifying supported protocol versions
+    /// and flags. Waits for the upstream to respond with either `SetupConnectionSuccess`
+    /// or `SetupConnectionError`.Upon successful setup, it then sends an
+    /// `OpenExtendedMiningChannel` request to establish a mining channel, including the
+    /// negotiated minimum extranonce size and initial nominal hashrate.
+    pub async fn connect(self_: Arc<Mutex<Self>>) -> ProxyResult<'static, ()> {
+        let (mut connection, rx_open_upstream_channel) =
+            self_.safe_lock(|u| (u.connection.clone(), u.rx_open_upstream_channel.clone()))?;
+        info!("Starting the upstream connection thread");
+        tokio::spawn(async move {
+            loop {
+                match rx_open_upstream_channel.recv().await {
+                    Ok(open) => {
+                        info!("Received new connection request: {:?}", open);
+                        // Send open channel request before returning
+                        let (nominal_hash_rate, min_extranonce_size) = self_
+                            .safe_lock(|u| {
+                                u.upstream_channel_manager
+                                    .safe_lock(|u| {
+                                        (u.bootstrap_nominal_hashrate, u.min_extranonce_size)
+                                    })
+                                    .map_err(|_e| PoisonLock)
+                            })
+                            .unwrap()
+                            .unwrap();
+                        let user_identity = open.user_identity.try_into().unwrap();
 
-        let sv2_frame: StdFrame = Message::Mining(open_channel).try_into()?;
-        connection.send(sv2_frame).await?;
+                        let open_channel: Mining<'_> =
+                            Mining::OpenExtendedMiningChannel(OpenExtendedMiningChannel {
+                                request_id: open.request_id,
+                                user_identity,
+                                nominal_hash_rate,
+                                max_target: u256_from_int(u64::MAX),
+                                min_extranonce_size,
+                            });
+
+                        info!(
+                            "Sending open channel message to upstream: {:?}",
+                            open_channel
+                        );
+
+                        let sv2_frame: StdFrame = Message::Mining(open_channel).try_into().unwrap();
+                        connection.send(sv2_frame).await.unwrap();
+                    }
+                    Err(e) => {
+                        warn!("Received and error while sending receiving open channel request from bridge: {:?}", e);
+                    }
+                }
+            }
+        });
 
         Ok(())
     }

@@ -20,6 +20,7 @@
 use crate::{
     channel_manager::{Sv1ChannelId, UpstreamChannelManager},
     proxy::next_mining_notify::create_notify,
+    OpenConnection,
 };
 
 use super::super::{
@@ -34,16 +35,21 @@ use roles_logic_sv2::{
     utils::Mutex,
     Error as RolesLogicError,
 };
-use std::sync::Arc;
-use tokio::{sync::broadcast, task::AbortHandle};
-use tracing::{debug, info};
+use std::{
+    sync::{atomic::AtomicU32, Arc},
+    time::Duration,
+};
+use tokio::{sync::broadcast, task::AbortHandle, time::sleep};
+use tracing::{debug, info, warn};
 use v1::{client_to_server::Submit, server_to_client, utils::HexU32Be};
+
+static REQUEST_ID: AtomicU32 = AtomicU32::new(0);
 
 /// Bridge between the SV2 `Upstream` and SV1 `Downstream` responsible for the following messaging
 /// translation:
 /// 1. SV1 `mining.submit` -> SV2 `SubmitSharesExtended`
 /// 2. SV2 `SetNewPrevHash` + `NewExtendedMiningJob` -> SV1 `mining.notify`
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Bridge {
     /// Receives a SV1 `mining.submit` message from the Downstream role.
     rx_sv1_downstream: Receiver<DownstreamMessages>,
@@ -65,6 +71,8 @@ pub struct Bridge {
     tx_status: status::Sender,
     task_collector: Arc<Mutex<Vec<(AbortHandle, String)>>>,
     upstream_channel_manager: Arc<Mutex<UpstreamChannelManager>>,
+    tx_open_upstream_channel: Sender<OpenConnection>,
+    aggregate: bool,
 }
 
 impl Bridge {
@@ -83,6 +91,8 @@ impl Bridge {
         tx_status: status::Sender,
         task_collector: Arc<Mutex<Vec<(AbortHandle, String)>>>,
         upstream_channel_manager: Arc<Mutex<UpstreamChannelManager>>,
+        tx_open_upstream_channel: Sender<OpenConnection>,
+        aggregate: bool,
     ) -> Arc<Mutex<Self>> {
         Arc::new(Mutex::new(Self {
             rx_sv1_downstream,
@@ -93,7 +103,77 @@ impl Bridge {
             tx_status,
             task_collector,
             upstream_channel_manager,
+            tx_open_upstream_channel,
+            aggregate,
         }))
+    }
+
+    pub fn have_upstream_channel(&mut self, request_id: u32) -> Option<OpenSv1Downstream> {
+        let result = self
+            .upstream_channel_manager
+            .safe_lock(|upstream_channel_manager| {
+                info!(
+                    "Received new downstream sv1 connection, number of upstream channels: {:?}",
+                    upstream_channel_manager.upstream_manager.len()
+                );
+
+                let channel_id = upstream_channel_manager
+                    .request_id_to_channel_id
+                    .get(&request_id)?;
+
+                let upstream_channel = upstream_channel_manager
+                    .upstream_manager
+                    .get_mut(channel_id)?;
+
+                let (channel_id, connection_id, extranonce, extranonce2_len) = upstream_channel
+                    .downstream_manager
+                    .on_new_downstream_connection(format!("{:?}:miner", request_id));
+                debug!("{channel_id:?}, {connection_id:?}, {extranonce:?}, {extranonce2_len:?}");
+                let active_job = upstream_channel.downstream_manager.active_job.clone();
+                let prev_hash = upstream_channel.downstream_manager.prev_block_hash.clone();
+                if let Some(active_job) = active_job {
+                    let result = prev_hash.map(|m| {
+                        let last_notify = create_notify(m, active_job, true);
+                        OpenSv1Downstream {
+                            channel_id,
+                            connection_id,
+                            last_notify: Some(last_notify),
+                            extranonce,
+                            extranonce2_len: extranonce2_len as u16,
+                        }
+                    });
+                    return result;
+                }
+                Some(OpenSv1Downstream {
+                    channel_id,
+                    connection_id,
+                    last_notify: None,
+                    extranonce,
+                    extranonce2_len: extranonce2_len as u16,
+                })
+            })
+            .unwrap();
+        result
+    }
+
+    pub async fn open_channel_upstream(&mut self) -> u32 {
+        info!("Opening new channel with upstream");
+        let request_id = REQUEST_ID.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+        while let Err(send_error) = self
+            .tx_open_upstream_channel
+            .send(OpenConnection {
+                request_id,
+                user_identity: format!("{:?}:miner", request_id),
+            })
+            .await
+        {
+            warn!(
+                "Received an error while sending the open channel request: {:?}",
+                send_error
+            );
+        }
+        info!("Successful sent open connection request to upstream subsystem");
+        request_id
     }
 
     /// Handles the event of a new SV1 downstream client connecting.
@@ -103,57 +183,32 @@ impl Bridge {
     /// extranonce and target for the miner, and provides the last known
     /// `mining.notify` message to immediately send to the new client.
     #[allow(clippy::result_large_err)]
-    pub fn on_new_sv1_connection(&mut self) -> ProxyResult<'static, Option<OpenSv1Downstream>> {
-        let result = self
-            .upstream_channel_manager
-            .safe_lock(|upstream_channel_manager| {
-                if upstream_channel_manager.aggregate {
-                    // In this case we already know that, we gonna have a single downstream
-                    // channel manager whose job is gonna be to aggregate downstream miners.
-                    info!("Received new downstream sv1 connection, number of upstream channels: {:?}", upstream_channel_manager.upstream_manager.len());
+    pub async fn on_new_sv1_connection(&mut self) -> Option<OpenSv1Downstream> {
+        let aggregate = self.aggregate;
+        if aggregate {
+            let current_request_id = REQUEST_ID.load(std::sync::atomic::Ordering::Relaxed);
 
-                    if let Some(upstream_manager) = upstream_channel_manager
-                        .upstream_manager
-                        .values_mut()
-                        .next()
-                    {
-                        let (channel_id, connection_id, extranonce, extranonce2_len) =
-                            upstream_manager
-                                .downstream_manager
-                                .on_new_downstream_connection("dummy".into());
-                        debug!("{channel_id:?}, {connection_id:?}, {extranonce:?}, {extranonce2_len:?}");
-                        let active_job = upstream_manager.downstream_manager.active_job.clone();
-                        let prev_hash = upstream_manager.downstream_manager.prev_block_hash.clone();
-                        if let Some(active_job) = active_job {
-                            debug!("Active Job: {active_job:?}");
-                            let result = prev_hash.map(|m| {
-                                let last_notify = create_notify(m, active_job, true);
-                                OpenSv1Downstream {
-                                    channel_id,
-                                    connection_id,
-                                    last_notify: Some(last_notify),
-                                    extranonce,
-                                    extranonce2_len: extranonce2_len as u16,
-                                }
-                            });
-                            return Ok(result);
-                        }
-                        return Ok(Some(OpenSv1Downstream {
-                            channel_id,
-                            connection_id,
-                            last_notify: None,
-                            extranonce,
-                            extranonce2_len: extranonce2_len as u16,
-                        }));
-                    }
-                    Ok(None)
-                } else {
-                    // For each new connection we gonna open a separate OpenExtendedMiningChannel
-                    // with upstream.
-                    Ok(None)
+            if let Some(open_sv1_downstream) = self.have_upstream_channel(current_request_id) {
+                return Some(open_sv1_downstream);
+            }
+
+            let request_id = self.open_channel_upstream().await;
+
+            loop {
+                sleep(Duration::from_secs(1)).await;
+                if let Some(open_sv1_downstream) = self.have_upstream_channel(request_id) {
+                    return Some(open_sv1_downstream);
                 }
-            })?;
-        result
+            }
+        } else {
+            let request_id = self.open_channel_upstream().await;
+            loop {
+                sleep(Duration::from_secs(1)).await;
+                if let Some(open_sv1_downstream) = self.have_upstream_channel(request_id) {
+                    return Some(open_sv1_downstream);
+                }
+            }
+        }
     }
 
     /// Starts the tasks responsible for receiving and processing
@@ -308,6 +363,7 @@ impl Bridge {
                 .unwrap();
             verdict
         })?;
+        info!("Share submission verdict: {verdict}");
         _ = share.verdict_sender.send(verdict).await;
         let tx_sv2_submit_shares_ext = self_.safe_lock(|s| s.tx_sv2_submit_shares_ext.clone())?;
 

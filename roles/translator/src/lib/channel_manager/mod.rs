@@ -74,6 +74,7 @@ impl Sv1Channel {
 #[derive(Debug)]
 pub struct UpstreamChannelManager {
     pub channel_ids: HashSet<u32>,
+    pub request_id_to_channel_id: HashMap<u32, u32>,
     pub upstream_manager: HashMap<u32, UpstreamChannel>,
     pub aggregate: bool,
     pub min_extranonce_size: u16,
@@ -115,6 +116,7 @@ impl UpstreamChannelManager {
     ) -> Self {
         Self {
             channel_ids: HashSet::new(),
+            request_id_to_channel_id: HashMap::new(),
             upstream_manager: HashMap::new(),
             aggregate: true,
             min_extranonce_size,
