@@ -19,8 +19,7 @@
 //!   ([`IsMiningDownstream`], [`IsDownstream`]).
 
 use crate::{
-    config::{DownstreamDifficultyConfig, UpstreamDifficultyConfig},
-    downstream_sv1,
+    channel_manager::{Sv1ChannelId, UpstreamChannelManager},
     error::ProxyResult,
     status,
 };
@@ -34,12 +33,9 @@ use tokio::{
     task::AbortHandle,
 };
 
-use super::{kill, DownstreamMessages, SubmitShareWithChannelId, SUBSCRIBE_TIMEOUT_SECS};
+use super::{kill, DownstreamMessages, SUBSCRIBE_TIMEOUT_SECS};
 
-use roles_logic_sv2::{
-    common_properties::{IsDownstream, IsMiningDownstream},
-    utils::Mutex,
-};
+use roles_logic_sv2::utils::Mutex;
 
 use crate::error::Error;
 use futures::select;
@@ -47,12 +43,7 @@ use tokio_util::codec::{FramedRead, LinesCodec};
 
 use std::{net::SocketAddr, sync::Arc};
 use tracing::{debug, info, warn};
-use v1::{
-    client_to_server::{self, Submit},
-    json_rpc, server_to_client,
-    utils::{Extranonce, HexU32Be},
-    IsServer,
-};
+use v1::{client_to_server::Submit, json_rpc, server_to_client, utils::HexU32Be, IsServer};
 
 /// The maximum allowed length for a single line (JSON-RPC message) received from an SV1 client.
 const MAX_LINE_LENGTH: usize = 2_usize.pow(16);
@@ -62,65 +53,34 @@ const MAX_LINE_LENGTH: usize = 2_usize.pow(16);
 #[derive(Debug)]
 pub struct Downstream {
     /// The unique identifier assigned to this downstream connection/channel.
-    pub(super) connection_id: u32,
+    pub(super) connection_id: Sv1ChannelId,
+    /// The channel id of the upstream channel
+    pub(super) channel_id: u32,
     /// List of authorized Downstream Mining Devices.
-    authorized_names: Vec<String>,
+    pub(super) authorized_names: Vec<String>,
     /// The extranonce1 value assigned to this downstream miner.
-    extranonce1: Vec<u8>,
+    pub(super) extranonce1: Vec<u8>,
     /// `extranonce1` to be sent to the Downstream in the SV1 `mining.subscribe` message response.
     //extranonce1: Vec<u8>,
     //extranonce2_size: usize,
     /// Version rolling mask bits
-    version_rolling_mask: Option<HexU32Be>,
+    pub(super) version_rolling_mask: Option<HexU32Be>,
     /// Minimum version rolling mask bits size
-    version_rolling_min_bit: Option<HexU32Be>,
+    pub(super) version_rolling_min_bit: Option<HexU32Be>,
     /// Sends a SV1 `mining.submit` message received from the Downstream role to the `Bridge` for
     /// translation into a SV2 `SubmitSharesExtended`.
-    tx_sv1_bridge: Sender<DownstreamMessages>,
+    pub(super) tx_sv1_bridge: Sender<DownstreamMessages>,
     /// Sends message to the SV1 Downstream role.
     tx_outgoing: Sender<json_rpc::Message>,
     /// True if this is the first job received from `Upstream`.
-    first_job_received: bool,
+    pub(super) first_job_received: bool,
     /// The expected size of the extranonce2 field provided by the miner.
-    extranonce2_len: usize,
-    /// Configuration and state for managing difficulty adjustments specific
-    /// to this individual downstream miner.
-    pub(super) difficulty_mgmt: DownstreamDifficultyConfig,
-    /// Configuration settings for the upstream channel's difficulty management.
-    pub(super) upstream_difficulty_config: Arc<Mutex<UpstreamDifficultyConfig>>,
+    pub(super) extranonce2_len: usize,
+
+    pub(super) upstream_channel_manager: Arc<Mutex<UpstreamChannelManager>>,
 }
 
 impl Downstream {
-    // not huge fan of test specific code in codebase.
-    #[cfg(test)]
-    pub fn new(
-        connection_id: u32,
-        authorized_names: Vec<String>,
-        extranonce1: Vec<u8>,
-        version_rolling_mask: Option<HexU32Be>,
-        version_rolling_min_bit: Option<HexU32Be>,
-        tx_sv1_bridge: Sender<DownstreamMessages>,
-        tx_outgoing: Sender<json_rpc::Message>,
-        first_job_received: bool,
-        extranonce2_len: usize,
-        difficulty_mgmt: DownstreamDifficultyConfig,
-        upstream_difficulty_config: Arc<Mutex<UpstreamDifficultyConfig>>,
-        last_job_id: String,
-    ) -> Self {
-        Downstream {
-            connection_id,
-            authorized_names,
-            extranonce1,
-            version_rolling_mask,
-            version_rolling_min_bit,
-            tx_sv1_bridge,
-            tx_outgoing,
-            first_job_received,
-            extranonce2_len,
-            difficulty_mgmt,
-            upstream_difficulty_config,
-        }
-    }
     /// Instantiates and manages a new handler for a single downstream SV1 client connection.
     ///
     /// This is the primary function called for each new incoming TCP stream from a miner.
@@ -134,7 +94,8 @@ impl Downstream {
     #[allow(clippy::too_many_arguments)]
     pub async fn new_downstream(
         stream: TcpStream,
-        connection_id: u32,
+        channel_id: u32,
+        connection_id: Sv1ChannelId,
         tx_sv1_bridge: Sender<DownstreamMessages>,
         mut rx_sv1_notify: broadcast::Receiver<server_to_client::Notify<'static>>,
         tx_status: status::Sender,
@@ -142,8 +103,7 @@ impl Downstream {
         last_notify: Option<server_to_client::Notify<'static>>,
         extranonce2_len: usize,
         host: String,
-        difficulty_config: DownstreamDifficultyConfig,
-        upstream_difficulty_config: Arc<Mutex<UpstreamDifficultyConfig>>,
+        upstream_channel_manager: Arc<Mutex<UpstreamChannelManager>>,
         task_collector: Arc<Mutex<Vec<(AbortHandle, String)>>>,
     ) {
         // Reads and writes from Downstream SV1 Mining Device Client
@@ -152,6 +112,7 @@ impl Downstream {
 
         let downstream = Arc::new(Mutex::new(Downstream {
             connection_id,
+            channel_id,
             authorized_names: vec![],
             extranonce1,
             //extranonce1: extranonce1.to_vec(),
@@ -161,8 +122,7 @@ impl Downstream {
             tx_outgoing,
             first_job_received: false,
             extranonce2_len,
-            difficulty_mgmt: difficulty_config,
-            upstream_difficulty_config,
+            upstream_channel_manager,
         }));
         let self_ = downstream.clone();
 
@@ -389,9 +349,8 @@ impl Downstream {
         tx_mining_notify: broadcast::Sender<server_to_client::Notify<'static>>,
         tx_status: status::Sender,
         bridge: Arc<Mutex<crate::proxy::Bridge>>,
-        downstream_difficulty_config: DownstreamDifficultyConfig,
-        upstream_difficulty_config: Arc<Mutex<UpstreamDifficultyConfig>>,
         task_collector: Arc<Mutex<Vec<(AbortHandle, String)>>>,
+        upstream_channel_manager: Arc<Mutex<UpstreamChannelManager>>,
     ) {
         let accept_connections = tokio::task::spawn({
             let task_collector = task_collector.clone();
@@ -399,20 +358,17 @@ impl Downstream {
                 let listener = TcpListener::bind(downstream_addr).await.unwrap();
 
                 while let Ok((stream, _)) = listener.accept().await {
-                    let expected_hash_rate =
-                        downstream_difficulty_config.min_individual_miner_hashrate;
-                    let open_sv1_downstream = bridge
-                        .safe_lock(|s| s.on_new_sv1_connection(expected_hash_rate))
-                        .unwrap();
-
+                    let mut bridge = bridge.safe_lock(|s| s.clone()).unwrap();
+                    let open_sv1_downstream = bridge.on_new_sv1_connection().await;
                     let host = stream.peer_addr().unwrap().to_string();
 
                     match open_sv1_downstream {
-                        Ok(opened) => {
+                        Some(opened) => {
                             info!("PROXY SERVER - ACCEPTING FROM DOWNSTREAM: {}", host);
                             Downstream::new_downstream(
                                 stream,
                                 opened.channel_id,
+                                opened.connection_id,
                                 tx_sv1_submit.clone(),
                                 tx_mining_notify.subscribe(),
                                 tx_status.listener_to_connection(),
@@ -420,17 +376,13 @@ impl Downstream {
                                 opened.last_notify,
                                 opened.extranonce2_len as usize,
                                 host,
-                                downstream_difficulty_config.clone(),
-                                upstream_difficulty_config.clone(),
+                                upstream_channel_manager.clone(),
                                 task_collector.clone(),
                             )
                             .await;
                         }
-                        Err(e) => {
-                            tracing::error!(
-                                "Failed to create a new downstream connection: {:?}",
-                                e
-                            );
+                        None => {
+                            tracing::error!("Failed to create a new downstream connection",);
                         }
                     }
                 }
@@ -510,201 +462,5 @@ impl Downstream {
         debug!("To Bridge: {:?}", msg);
         let _ = sender.send(msg).await;
         Ok(())
-    }
-}
-
-/// Implements `IsServer` for `Downstream` to handle the SV1 messages.
-impl IsServer<'static> for Downstream {
-    /// Handles the incoming SV1 `mining.configure` message.
-    ///
-    /// This message is received after `mining.subscribe` and `mining.authorize`.
-    /// It allows the miner to negotiate capabilities, particularly regarding
-    /// version rolling. This method processes the version rolling mask and
-    /// minimum bit count provided by the client.
-    ///
-    /// Returns a tuple containing:
-    /// 1. `Option<server_to_client::VersionRollingParams>`: The version rolling parameters
-    ///    negotiated by the server (proxy).
-    /// 2. `Option<bool>`: A boolean indicating whether the server (proxy) supports version rolling
-    ///    (always `Some(false)` for TProxy according to the SV1 spec when not supporting work
-    ///    selection).
-    fn handle_configure(
-        &mut self,
-        request: &client_to_server::Configure,
-    ) -> (Option<server_to_client::VersionRollingParams>, Option<bool>) {
-        info!("Down: Configuring");
-        debug!("Down: Handling mining.configure: {:?}", &request);
-
-        // TODO 0x1FFFE000 should be configured
-        // = 11111111111111110000000000000
-        // this is a reasonable default as it allows all 16 version bits to be used
-        // If the tproxy/pool needs to use some version bits this needs to be configurable
-        // so upstreams can negotiate with downstreams. When that happens this should consider
-        // the min_bit_count in the mining.configure message
-        self.version_rolling_mask = request
-            .version_rolling_mask()
-            .map(|mask| HexU32Be(mask & 0x1FFFE000));
-        self.version_rolling_min_bit = request.version_rolling_min_bit_count();
-
-        debug!(
-            "Negotiated version_rolling_mask is {:?}",
-            self.version_rolling_mask
-        );
-        (
-            Some(server_to_client::VersionRollingParams::new(
-                self.version_rolling_mask.clone().unwrap_or(HexU32Be(0)),
-                self.version_rolling_min_bit.clone().unwrap_or(HexU32Be(0)),
-            ).expect("Version mask invalid, automatic version mask selection not supported, please change it in carte::downstream_sv1::mod.rs")),
-            Some(false),
-        )
-    }
-
-    /// Handles the incoming SV1 `mining.subscribe` message.
-    ///
-    /// This is typically the first message received from a new client. In the SV1
-    /// protocol, it's used to subscribe to job notifications and receive session
-    /// details like extranonce1 and extranonce2 size. This method acknowledges the subscription and
-    /// provides the necessary details derived from the upstream SV2 connection (extranonce1 and
-    /// extranonce2 size). It also provides subscription IDs for the
-    /// `mining.set_difficulty` and `mining.notify` methods.
-    fn handle_subscribe(&self, request: &client_to_server::Subscribe) -> Vec<(String, String)> {
-        info!("Down: Subscribing");
-        debug!("Down: Handling mining.subscribe: {:?}", &request);
-
-        let set_difficulty_sub = (
-            "mining.set_difficulty".to_string(),
-            downstream_sv1::new_subscription_id(),
-        );
-        let notify_sub = (
-            "mining.notify".to_string(),
-            "ae6812eb4cd7735a302a8a9dd95cf71f".to_string(),
-        );
-
-        vec![set_difficulty_sub, notify_sub]
-    }
-
-    /// Any numbers of workers may be authorized at any time during the session. In this way, a
-    /// large number of independent Mining Devices can be handled with a single SV1 connection.
-    /// https://bitcoin.stackexchange.com/questions/29416/how-do-pool-servers-handle-multiple-workers-sharing-one-connection-with-stratum
-    fn handle_authorize(&self, request: &client_to_server::Authorize) -> bool {
-        info!("Down: Authorizing");
-        debug!("Down: Handling mining.authorize: {:?}", &request);
-        true
-    }
-
-    /// Handles the incoming SV1 `mining.submit` message.
-    ///
-    /// This message is sent by the miner when they find a share that meets
-    /// their current difficulty target. It contains the job ID, ntime, nonce,
-    /// and extranonce2.
-    ///
-    /// This method processes the submitted share, potentially validates it
-    /// against the downstream target (although this might happen in the Bridge
-    /// or difficulty management logic), translates it into a
-    /// [`SubmitShareWithChannelId`], and sends it to the Bridge for
-    /// translation to SV2 and forwarding upstream if it meets the upstream target.
-    fn handle_submit(&self, request: &client_to_server::Submit<'static>) -> bool {
-        info!("Down: Submitting Share {:?}", request);
-        debug!("Down: Handling mining.submit: {:?}", &request);
-
-        // TODO: Check if receiving valid shares by adding diff field to Downstream
-
-        let to_send = SubmitShareWithChannelId {
-            channel_id: self.connection_id,
-            share: request.clone(),
-            extranonce: self.extranonce1.clone(),
-            extranonce2_len: self.extranonce2_len,
-            version_rolling_mask: self.version_rolling_mask.clone(),
-        };
-
-        self.tx_sv1_bridge
-            .try_send(DownstreamMessages::SubmitShares(to_send))
-            .unwrap();
-
-        true
-    }
-
-    /// Indicates to the server that the client supports the mining.set_extranonce method.
-    fn handle_extranonce_subscribe(&self) {}
-
-    /// Checks if a Downstream role is authorized.
-    fn is_authorized(&self, name: &str) -> bool {
-        self.authorized_names.contains(&name.to_string())
-    }
-
-    /// Authorizes a Downstream role.
-    fn authorize(&mut self, name: &str) {
-        self.authorized_names.push(name.to_string());
-    }
-
-    /// Sets the `extranonce1` field sent in the SV1 `mining.notify` message to the value specified
-    /// by the SV2 `OpenExtendedMiningChannelSuccess` message sent from the Upstream role.
-    fn set_extranonce1(
-        &mut self,
-        _extranonce1: Option<Extranonce<'static>>,
-    ) -> Extranonce<'static> {
-        self.extranonce1.clone().try_into().unwrap()
-    }
-
-    /// Returns the `Downstream`'s `extranonce1` value.
-    fn extranonce1(&self) -> Extranonce<'static> {
-        self.extranonce1.clone().try_into().unwrap()
-    }
-
-    /// Sets the `extranonce2_size` field sent in the SV1 `mining.notify` message to the value
-    /// specified by the SV2 `OpenExtendedMiningChannelSuccess` message sent from the Upstream role.
-    fn set_extranonce2_size(&mut self, _extra_nonce2_size: Option<usize>) -> usize {
-        self.extranonce2_len
-    }
-
-    /// Returns the `Downstream`'s `extranonce2_size` value.
-    fn extranonce2_size(&self) -> usize {
-        self.extranonce2_len
-    }
-
-    /// Returns the version rolling mask.
-    fn version_rolling_mask(&self) -> Option<HexU32Be> {
-        self.version_rolling_mask.clone()
-    }
-
-    /// Sets the version rolling mask.
-    fn set_version_rolling_mask(&mut self, mask: Option<HexU32Be>) {
-        self.version_rolling_mask = mask;
-    }
-
-    /// Sets the minimum version rolling bit.
-    fn set_version_rolling_min_bit(&mut self, mask: Option<HexU32Be>) {
-        self.version_rolling_min_bit = mask
-    }
-
-    fn notify(&mut self) -> Result<json_rpc::Message, v1::error::Error> {
-        unreachable!()
-    }
-}
-
-// Can we remove this?
-impl IsMiningDownstream for Downstream {}
-// Can we remove this?
-impl IsDownstream for Downstream {
-    fn get_downstream_mining_data(
-        &self,
-    ) -> roles_logic_sv2::common_properties::CommonDownstreamData {
-        todo!()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn gets_difficulty_from_target() {
-        let target = vec![
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 128, 255, 127,
-            0, 0, 0, 0, 0,
-        ];
-        let actual = Downstream::difficulty_from_target(target).unwrap();
-        let expect = 512.0;
-        assert_eq!(actual, expect);
     }
 }

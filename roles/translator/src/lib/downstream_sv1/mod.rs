@@ -11,11 +11,15 @@
 //! - [`diff_management`]: (Declared here, likely contains downstream difficulty logic)
 //! - [`downstream`]: Defines the core [`Downstream`] struct and its functionalities.
 
+use async_channel::Sender;
 use roles_logic_sv2::mining_sv2::Target;
 use v1::{client_to_server::Submit, utils::HexU32Be};
 pub mod diff_management;
 pub mod downstream;
+pub mod message_handler;
 pub use downstream::Downstream;
+
+use crate::channel_manager::Sv1ChannelId;
 
 /// This constant defines a timeout duration. It is used to enforce
 /// that clients sending a `mining.subscribe` message must follow up
@@ -37,13 +41,15 @@ pub enum DownstreamMessages {
 
 /// wrapper around a `mining.submit` with extra channel informationfor the Bridge to
 /// process
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SubmitShareWithChannelId {
+    pub connection_id: Sv1ChannelId,
     pub channel_id: u32,
     pub share: Submit<'static>,
     pub extranonce: Vec<u8>,
     pub extranonce2_len: usize,
     pub version_rolling_mask: Option<HexU32Be>,
+    pub verdict_sender: Sender<bool>,
 }
 
 /// message for notifying the bridge that a downstream target has updated
@@ -51,6 +57,7 @@ pub struct SubmitShareWithChannelId {
 #[derive(Debug)]
 pub struct SetDownstreamTarget {
     pub channel_id: u32,
+    pub connection_id: Sv1ChannelId,
     pub new_target: Target,
 }
 

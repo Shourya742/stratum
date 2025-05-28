@@ -11,6 +11,7 @@
 //! It relies on several sub-modules (`config`, `downstream_sv1`, `upstream_sv2`, `proxy`, `status`,
 //! etc.) for specialized functionalities.
 use async_channel::{bounded, unbounded};
+use channel_manager::UpstreamChannelManager;
 use futures::FutureExt;
 use rand::Rng;
 pub use roles_logic_sv2::utils::Mutex;
@@ -33,6 +34,7 @@ use config::TranslatorConfig;
 
 use crate::status::State;
 
+pub mod channel_manager;
 pub mod config;
 pub mod downstream_sv1;
 pub mod error;
@@ -47,6 +49,12 @@ pub struct TranslatorSv2 {
     config: TranslatorConfig,
     reconnect_wait_time: u64,
     shutdown: Arc<Notify>,
+}
+
+#[derive(Clone, Debug)]
+pub struct OpenConnection {
+    pub request_id: u32,
+    pub user_identity: String,
 }
 
 impl TranslatorSv2 {
@@ -72,9 +80,6 @@ impl TranslatorSv2 {
         // Status channel for components to signal errors or state changes.
         let (tx_status, rx_status) = unbounded();
 
-        // Shared mutable state for the current mining target.
-        let target = Arc::new(Mutex::new(vec![0; 32]));
-
         // Broadcast channel to send SV1 `mining.notify` messages from the Bridge
         // to all connected Downstream (SV1) clients.
         let (tx_sv1_notify, _rx_sv1_notify): (
@@ -91,7 +96,6 @@ impl TranslatorSv2 {
         Self::internal_start(
             self.config.clone(),
             tx_sv1_notify.clone(),
-            target.clone(),
             tx_status.clone(),
             task_collector.clone(),
         )
@@ -133,7 +137,6 @@ impl TranslatorSv2 {
                                 error!("Trying to reconnect the Upstream because of: {}", err);
                                 let task_collector1 = task_collector_.clone();
                                 let tx_sv1_notify1 = tx_sv1_notify.clone();
-                                let target = target.clone();
                                 let tx_status = tx_status.clone();
                                 let proxy_config = self.config.clone();
                                 // Spawn a new task to handle the reconnection process.
@@ -150,7 +153,6 @@ impl TranslatorSv2 {
                                     Self::internal_start(
                                         proxy_config,
                                         tx_sv1_notify1,
-                                        target.clone(),
                                         tx_status.clone(),
                                         task_collector1,
                                     )
@@ -189,7 +191,6 @@ impl TranslatorSv2 {
     async fn internal_start(
         proxy_config: TranslatorConfig,
         tx_sv1_notify: broadcast::Sender<server_to_client::Notify<'static>>,
-        target: Arc<Mutex<Vec<u8>>>,
         tx_status: async_channel::Sender<Status<'static>>,
         task_collector: Arc<Mutex<Vec<(AbortHandle, String)>>>,
     ) {
@@ -202,11 +203,10 @@ impl TranslatorSv2 {
         // Channel: Upstream -> Bridge (SV2 NewExtendedMiningJob)
         let (tx_sv2_new_ext_mining_job, rx_sv2_new_ext_mining_job) = bounded(10);
 
-        // Channel: Upstream -> internal_start -> Bridge (Initial Extranonce)
-        let (tx_sv2_extranonce, rx_sv2_extranonce) = bounded(1);
-
         // Channel: Upstream -> Bridge (SV2 SetNewPrevHash)
         let (tx_sv2_set_new_prev_hash, rx_sv2_set_new_prev_hash) = bounded(10);
+
+        let (tx_open_upstream_channel, rx_open_upstream_channel) = bounded::<OpenConnection>(10);
 
         // Prepare upstream connection address.
         let upstream_addr = SocketAddr::new(
@@ -215,8 +215,17 @@ impl TranslatorSv2 {
             proxy_config.upstream_port,
         );
 
-        // Shared difficulty configuration
-        let diff_config = Arc::new(Mutex::new(proxy_config.upstream_difficulty_config.clone()));
+        let upstream_channel_manager = Arc::new(Mutex::new(UpstreamChannelManager::new(
+            proxy_config.min_extranonce2_size,
+            proxy_config
+                .upstream_difficulty_config
+                .channel_nominal_hashrate,
+            proxy_config
+                .upstream_difficulty_config
+                .channel_diff_update_interval,
+            proxy_config.downstream_difficulty_config.shares_per_minute,
+        )));
+
         let task_collector_upstream = task_collector.clone();
         // Instantiate the Upstream (SV2) component.
         let upstream = match upstream_sv2::Upstream::new(
@@ -225,12 +234,12 @@ impl TranslatorSv2 {
             rx_sv2_submit_shares_ext,  // Receives shares from Bridge
             tx_sv2_set_new_prev_hash,  // Sends prev hash updates to Bridge
             tx_sv2_new_ext_mining_job, // Sends new jobs to Bridge
-            proxy_config.min_extranonce2_size,
-            tx_sv2_extranonce,                           // Sends initial extranonce
-            status::Sender::Upstream(tx_status.clone()), // Sends status updates
-            target.clone(),                              // Shares target state
-            diff_config.clone(),                         // Shares difficulty config
+            status::Sender::Upstream(tx_status.clone()), // Shares target state
             task_collector_upstream,
+            upstream_channel_manager.clone(),
+            proxy_config.min_supported_version,
+            proxy_config.max_supported_version,
+            rx_open_upstream_channel,
         )
         .await
         {
@@ -248,21 +257,7 @@ impl TranslatorSv2 {
         // even during potentially long-running connection attempts.
         let task = task::spawn(async move {
             // Connect to the SV2 Upstream role
-            match upstream_sv2::Upstream::connect(
-                upstream.clone(),
-                proxy_config.min_supported_version,
-                proxy_config.max_supported_version,
-            )
-            .await
-            {
-                Ok(_) => info!("Connected to Upstream!"),
-                Err(e) => {
-                    // FIXME: Send error to status main loop, and then exit.
-                    error!("Failed to connect to Upstream EXITING! : {}", e);
-                    return;
-                }
-            }
-
+            _ = upstream_sv2::Upstream::connect(upstream.clone()).await;
             // Start the task to parse incoming messages from the Upstream.
             if let Err(e) = upstream_sv2::Upstream::parse_incoming(upstream.clone()) {
                 error!("failed to create sv2 parser: {}", e);
@@ -276,17 +271,6 @@ impl TranslatorSv2 {
                 return;
             }
 
-            // Wait to receive the initial extranonce information from the Upstream.
-            // This is needed before the Bridge can be fully initialized.
-            let (extended_extranonce, up_id) = rx_sv2_extranonce.recv().await.unwrap();
-            loop {
-                let target: [u8; 32] = target.safe_lock(|t| t.clone()).unwrap().try_into().unwrap();
-                if target != [0; 32] {
-                    break;
-                };
-                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-            }
-
             let task_collector_bridge = task_collector_init_task.clone();
             // Instantiate the Bridge component.
             let b = proxy::Bridge::new(
@@ -296,10 +280,10 @@ impl TranslatorSv2 {
                 rx_sv2_new_ext_mining_job,
                 tx_sv1_notify.clone(),
                 status::Sender::Bridge(tx_status.clone()),
-                extended_extranonce,
-                target,
-                up_id,
                 task_collector_bridge,
+                upstream_channel_manager.clone(),
+                tx_open_upstream_channel,
+                true,
             );
             // Start the Bridge's main processing loop.
             proxy::Bridge::start(b.clone());
@@ -318,9 +302,8 @@ impl TranslatorSv2 {
                 tx_sv1_notify,
                 status::Sender::DownstreamListener(tx_status.clone()),
                 b,
-                proxy_config.downstream_difficulty_config,
-                diff_config,
                 task_collector_downstream,
+                upstream_channel_manager.clone(),
             );
         }); // End of init task
         let _ =
