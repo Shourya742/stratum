@@ -53,23 +53,35 @@ pub trait ParseJobDeclarationMessagesFromUpstream {
 
     fn handle_allocate_mining_job_token_success(
         &mut self,
-        message: AllocateMiningJobTokenSuccess,
-    ) -> Result<Option<JobDeclaration<'static>>, Error>;
+        msg: AllocateMiningJobTokenSuccess,
+    ) -> Result<Option<JobDeclaration<'static>>, Error> {
+        let _ = msg;
+        Ok(None)
+    }
 
     fn handle_declare_mining_job_success(
         &mut self,
-        message: DeclareMiningJobSuccess,
-    ) -> Result<Option<JobDeclaration<'static>>, Error>;
+        msg: DeclareMiningJobSuccess,
+    ) -> Result<Option<JobDeclaration<'static>>, Error> {
+        let _ = msg;
+        Ok(None)
+    }
 
     fn handle_declare_mining_job_error(
         &mut self,
         message: DeclareMiningJobError,
-    ) -> Result<Option<JobDeclaration<'static>>, Error>;
+    ) -> Result<Option<JobDeclaration<'static>>, Error> {
+        let _  = msg;
+        Ok(None)
+    }
 
     fn handle_provide_missing_transactions(
         &mut self,
         message: ProvideMissingTransactions,
-    ) -> Result<Option<JobDeclaration<'static>>, Error>;
+    ) -> Result<Option<JobDeclaration<'static>>, Error> {
+        let _  = msg;
+        Ok(None)
+    }
 }
 
 
@@ -114,21 +126,33 @@ pub trait ParseJobDeclarationMessagesFromDownstream {
 
     fn handle_allocate_mining_job_token(
         &mut self,
-        message: AllocateMiningJobToken,
-    ) -> Result<Option<JobDeclaration<'static>>, Error>;
+        msg: AllocateMiningJobToken,
+    ) -> Result<Option<JobDeclaration<'static>>, Error> {
+        let _  = msg;
+        Ok(None)
+    }
 
     fn handle_declare_mining_job(
         &mut self,
-        message: DeclareMiningJob,
-    ) -> Result<Option<JobDeclaration<'static>>, Error>;
+        msg: DeclareMiningJob,
+    ) -> Result<Option<JobDeclaration<'static>>, Error> {
+        let _ = msg;
+        Ok(None)
+    }
 
     fn handle_provide_missing_transactions_success(
         &mut self,
-        message: ProvideMissingTransactionsSuccess,
-    ) -> Result<Option<JobDeclaration<'static>>, Error>;
+        msg: ProvideMissingTransactionsSuccess,
+    ) -> Result<Option<JobDeclaration<'static>>, Error> {
+        let _ = msg;
+        Ok(None)
+    }
 
     fn handle_push_solution(
         &mut self,
-        message: PushSolution,
-    ) -> Result<Option<JobDeclaration<'static>>, Error>;
+        msg: PushSolution,
+    ) -> Result<Option<JobDeclaration<'static>>, Error> {
+        let _ = msg;
+        Ok(None)
+    }
 }

@@ -40,20 +40,32 @@ pub trait ParseCommonMessagesFromUpstream{
     fn handle_setup_connection_success(
         &mut self,
         msg: SetupConnectionSuccess,
-    ) -> Result<Option<CommonMessages<'static>>, Error>;
+    ) -> Result<Option<CommonMessages<'static>>, Error> {
+        let _ = msg;
+        Ok(None)
+    }
 
     fn handle_setup_connection_error(
         &mut self,
         msg: SetupConnectionError,
-    ) -> Result<Option<CommonMessages<'static>>, Error>;
+    ) -> Result<Option<CommonMessages<'static>>, Error> {
+        let _ = msg;
+        Ok(None)
+    }
 
     fn handle_channel_endpoint_changed(
         &mut self,
         msg: ChannelEndpointChanged,
-    ) -> Result<Option<CommonMessages<'static>>, Error>;
+    ) -> Result<Option<CommonMessages<'static>>, Error> {
+        let _ = msg;
+        Ok(None)
+    }
 
     fn handle_reconnect(
         &mut self,
         msg: Reconnect,
-    ) -> Result<Option<CommonMessages<'static>>, Error>;
+    ) -> Result<Option<CommonMessages<'static>>, Error> {
+        let _ = msg;
+        Ok(None)
+    }
 }

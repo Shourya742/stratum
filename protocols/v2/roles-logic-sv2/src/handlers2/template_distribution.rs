@@ -47,23 +47,35 @@ pub trait ParseTemplateDistributionMessagesFromServer {
 
     fn handle_new_template(
         &mut self,
-        m: NewTemplate,
-    ) -> Result<Option<TemplateDistribution<'static>>, Error>;
+        msg: NewTemplate,
+    ) -> Result<Option<TemplateDistribution<'static>>, Error> {
+        let _ = msg;
+        Ok(None)
+    }
 
     fn handle_set_new_prev_hash(
         &mut self,
-        m: SetNewPrevHash,
-    ) -> Result<Option<TemplateDistribution<'static>>, Error>;
+        msg: SetNewPrevHash,
+    ) -> Result<Option<TemplateDistribution<'static>>, Error> {
+        let _ = msg;
+        Ok(None)
+    }
 
     fn handle_request_tx_data_success(
         &mut self,
-        m: RequestTransactionDataSuccess,
-    ) -> Result<Option<TemplateDistribution<'static>>, Error>;
+        msg: RequestTransactionDataSuccess,
+    ) -> Result<Option<TemplateDistribution<'static>>, Error> {
+        let _ = msg;
+        Ok(None)
+    }
 
     fn handle_request_tx_data_error(
         &mut self,
-        m: RequestTransactionDataError,
-    ) -> Result<Option<TemplateDistribution<'static>>, Error>;
+        msg: RequestTransactionDataError,
+    ) -> Result<Option<TemplateDistribution<'static>>, Error> {
+        let _ = msg;
+        Ok(None)
+    }
 }
 
 
@@ -109,16 +121,25 @@ pub trait ParseTemplateDistributionMessagesFromClient {
 
     fn handle_coinbase_out_data_size(
         &mut self,
-        m: CoinbaseOutputConstraints,
-    ) -> Result<Option<TemplateDistribution<'static>>, Error>;
+        msg: CoinbaseOutputConstraints,
+    ) -> Result<Option<TemplateDistribution<'static>>, Error> {
+        let _ = msg;
+        Ok(None)
+    }
 
     fn handle_request_tx_data(
         &mut self,
-        m: RequestTransactionData,
-    ) -> Result<Option<TemplateDistribution<'static>>, Error>;
+        msg: RequestTransactionData,
+    ) -> Result<Option<TemplateDistribution<'static>>, Error> {
+        let _ = msg;
+        Ok(None)
+    }
 
     fn handle_request_submit_solution(
         &mut self,
-        m: SubmitSolution,
-    ) -> Result<Option<TemplateDistribution<'static>>, Error>;
+        msg: SubmitSolution,
+    ) -> Result<Option<TemplateDistribution<'static>>, Error> {
+        let _ = msg;
+        Ok(None)
+    }
 }
