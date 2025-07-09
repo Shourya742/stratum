@@ -11,6 +11,7 @@ use mining_sv2::{
 
 use mining_sv2::*;
 use std::fmt::Debug as D;
+use template_distribution_sv2::MESSAGE_TYPE_SET_NEW_PREV_HASH;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum SupportedChannelTypes {
@@ -20,97 +21,41 @@ pub enum SupportedChannelTypes {
     GroupAndExtended,
 }
 
+#[derive(PartialEq, Eq)]
+pub enum DownstreamAuth {
+    NotImplemented,
+    Allow,
+    Restrict,
+}
 
-pub trait ParseMiningMessagesFromDownstream<Up: D>
-where
-    Self: Sized + D,
-{
-    fn get_channel_type(&self) -> SupportedChannelTypes;
-    fn is_work_selection_enabled(&self) -> bool;
+pub trait MiningChannelConfig {
+    fn get_channel_type(&self) -> SupportedChannelTypes {
+        SupportedChannelTypes::Extended
+    }
+    fn is_work_selection_enabled(&self) -> bool {
+        false
+    }
 
     fn is_downstream_authorized(
         &self,
         user_identity: &binary_sv2::Str0255,
-    ) -> Result<bool, Error>;
-
-    fn handle_mining_message(&mut self, message: Mining) -> Result<Option<Mining<'static>>, Error> {
-        let (channel_type, work_selection) =
-            (self.get_channel_type(), self.is_work_selection_enabled());
-
-        use Mining::*;
-        match message {
-            OpenStandardMiningChannel(m) => {
-                if !self.is_downstream_authorized(&m.user_identity)? {
-                    return Ok(Some(Mining::OpenMiningChannelError(
-                        mining_sv2::OpenMiningChannelError::new_unknown_user(m.get_request_id_as_u32()),
-                    )));
-                }
-
-                match channel_type {
-                    SupportedChannelTypes::Standard
-                    | SupportedChannelTypes::Group
-                    | SupportedChannelTypes::GroupAndExtended => {
-                        self.handle_open_standard_mining_channel(m)
-                    }
-                    SupportedChannelTypes::Extended => Err(Error::UnexpectedMessage(
-                        MESSAGE_TYPE_OPEN_STANDARD_MINING_CHANNEL,
-                    )),
-                }
-            }
-            OpenExtendedMiningChannel(m) => {
-                if !self.is_downstream_authorized(&m.user_identity)? {
-                    return Ok(Some(Mining::OpenMiningChannelError(
-                        mining_sv2::OpenMiningChannelError::new_unknown_user(m.get_request_id_as_u32()),
-                    )));
-                }
-
-                match channel_type {
-                    SupportedChannelTypes::Extended
-                    | SupportedChannelTypes::GroupAndExtended => {
-                        self.handle_open_extended_mining_channel(m)
-                    }
-                    _ => Err(Error::UnexpectedMessage(MESSAGE_TYPE_OPEN_EXTENDED_MINING_CHANNEL)),
-                }
-            }
-            UpdateChannel(m) => self.handle_update_channel(m),
-
-            SubmitSharesStandard(m) => match channel_type {
-                SupportedChannelTypes::Standard
-                | SupportedChannelTypes::Group
-                | SupportedChannelTypes::GroupAndExtended => {
-                    self.handle_submit_shares_standard(m)
-                }
-                SupportedChannelTypes::Extended => Err(Error::UnexpectedMessage(
-                    MESSAGE_TYPE_SUBMIT_SHARES_STANDARD,
-                )),
-            },
-
-            SubmitSharesExtended(m) => match channel_type {
-                SupportedChannelTypes::Extended
-                | SupportedChannelTypes::GroupAndExtended => {
-                    self.handle_submit_shares_extended(m)
-                }
-                _ => Err(Error::UnexpectedMessage(MESSAGE_TYPE_SUBMIT_SHARES_EXTENDED)),
-            },
-
-            SetCustomMiningJob(m) => match (channel_type, work_selection) {
-                (SupportedChannelTypes::Extended, true)
-                | (SupportedChannelTypes::GroupAndExtended, true) => {
-                    self.handle_set_custom_mining_job(m)
-                }
-                _ => Err(Error::UnexpectedMessage(MESSAGE_TYPE_SET_CUSTOM_MINING_JOB)),
-            },
-
-            _ => Err(Error::UnexpectedMessage(0)),
-        }
+    ) -> Result<DownstreamAuth, Error> {
+        Ok(DownstreamAuth::NotImplemented)
     }
+}
 
+pub trait ParseMiningMessagesFromDownstream<Up: D>
+where
+    Self: Sized + D + MiningChannelConfig,
+{
     fn handle_open_standard_mining_channel(
         &mut self,
         msg: OpenStandardMiningChannel,
     ) -> Result<Option<Mining<'static>>, Error> {
         let _ = msg;
-        Ok(None)
+        Err(Error::UnexpectedMessage(
+            MESSAGE_TYPE_OPEN_STANDARD_MINING_CHANNEL,
+        ))
     }
 
     fn handle_open_extended_mining_channel(
@@ -118,7 +63,9 @@ where
         msg: OpenExtendedMiningChannel,
     ) -> Result<Option<Mining<'static>>, Error> {
         let _ = msg;
-        Ok(None)
+        Err(Error::UnexpectedMessage(
+            MESSAGE_TYPE_OPEN_EXTENDED_MINING_CHANNEL,
+        ))
     }
 
     fn handle_update_channel(
@@ -126,7 +73,7 @@ where
         msg: UpdateChannel,
     ) -> Result<Option<Mining<'static>>, Error> {
         let _ = msg;
-        Ok(None)
+        Err(Error::UnexpectedMessage(MESSAGE_TYPE_UPDATE_CHANNEL))
     }
 
     fn handle_submit_shares_standard(
@@ -134,7 +81,9 @@ where
         msg: SubmitSharesStandard,
     ) -> Result<Option<Mining<'static>>, Error> {
         let _ = msg;
-        Ok(None)
+        Err(Error::UnexpectedMessage(
+            MESSAGE_TYPE_SUBMIT_SHARES_STANDARD,
+        ))
     }
 
     fn handle_submit_shares_extended(
@@ -142,7 +91,9 @@ where
         msg: SubmitSharesExtended,
     ) -> Result<Option<Mining<'static>>, Error> {
         let _ = msg;
-        Ok(None)
+        Err(Error::UnexpectedMessage(
+            MESSAGE_TYPE_SUBMIT_SHARES_EXTENDED,
+        ))
     }
 
     fn handle_set_custom_mining_job(
@@ -150,108 +101,22 @@ where
         msg: SetCustomMiningJob,
     ) -> Result<Option<Mining<'static>>, Error> {
         let _ = msg;
-        Ok(None)
+        Err(Error::UnexpectedMessage(MESSAGE_TYPE_SET_CUSTOM_MINING_JOB))
     }
 }
 
-
-pub trait ParseMiningMessagesFromUpstream<Down:D>
+pub trait ParseMiningMessagesFromUpstream<Down: D>
 where
-    Self: Sized + D,
+    Self: Sized + D + MiningChannelConfig,
 {
-    fn get_channel_type(&self) -> SupportedChannelTypes;
-    fn is_work_selection_enabled(&self) -> bool;
-
-    fn handle_mining_message(&mut self, message: Mining) -> Result<Option<Mining<'static>>, Error> {
-        let (channel_type, work_selection) =
-            (self.get_channel_type(), self.is_work_selection_enabled());
-
-        use Mining::*;
-        match message {
-            OpenStandardMiningChannelSuccess(m) => match channel_type {
-                SupportedChannelTypes::Standard
-                | SupportedChannelTypes::Group
-                | SupportedChannelTypes::GroupAndExtended => {
-                    self.handle_open_standard_mining_channel_success(m)
-                }
-                _ => Err(Error::UnexpectedMessage(
-                    MESSAGE_TYPE_OPEN_STANDARD_MINING_CHANNEL_SUCCESS,
-                )),
-            },
-
-            OpenExtendedMiningChannelSuccess(m) => match channel_type {
-                SupportedChannelTypes::Extended
-                | SupportedChannelTypes::GroupAndExtended => {
-                    self.handle_open_extended_mining_channel_success(m)
-                }
-                _ => Err(Error::UnexpectedMessage(
-                    MESSAGE_TYPE_OPEN_EXTENDED_MINING_CHANNEL_SUCCESS,
-                )),
-            },
-
-            OpenMiningChannelError(m) => self.handle_open_mining_channel_error(m),
-            UpdateChannelError(m) => self.handle_update_channel_error(m),
-            CloseChannel(m) => self.handle_close_channel(m),
-            SetExtranoncePrefix(m) => self.handle_set_extranonce_prefix(m),
-            SubmitSharesSuccess(m) => self.handle_submit_shares_success(m),
-            SubmitSharesError(m) => self.handle_submit_shares_error(m),
-
-            NewMiningJob(m) => match channel_type {
-                SupportedChannelTypes::Standard => self.handle_new_mining_job(m),
-                _ => Err(Error::UnexpectedMessage(MESSAGE_TYPE_NEW_MINING_JOB)),
-            },
-
-            NewExtendedMiningJob(m) => match channel_type {
-                SupportedChannelTypes::Extended
-                | SupportedChannelTypes::Group
-                | SupportedChannelTypes::GroupAndExtended => {
-                    self.handle_new_extended_mining_job(m)
-                }
-                _ => Err(Error::UnexpectedMessage(MESSAGE_TYPE_NEW_EXTENDED_MINING_JOB)),
-            },
-
-            SetNewPrevHash(m) => self.handle_set_new_prev_hash(m),
-
-            SetCustomMiningJobSuccess(m) => match (channel_type, work_selection) {
-                (SupportedChannelTypes::Extended, true)
-                | (SupportedChannelTypes::GroupAndExtended, true) => {
-                    self.handle_set_custom_mining_job_success(m)
-                }
-                _ => Err(Error::UnexpectedMessage(
-                    MESSAGE_TYPE_SET_CUSTOM_MINING_JOB_SUCCESS,
-                )),
-            },
-
-            SetCustomMiningJobError(m) => match (channel_type, work_selection) {
-                (SupportedChannelTypes::Extended, true)
-                | (SupportedChannelTypes::Group, true)
-                | (SupportedChannelTypes::GroupAndExtended, true) => {
-                    self.handle_set_custom_mining_job_error(m)
-                }
-                _ => Err(Error::UnexpectedMessage(
-                    MESSAGE_TYPE_SET_CUSTOM_MINING_JOB_ERROR,
-                )),
-            },
-
-            SetTarget(m) => self.handle_set_target(m),
-
-            SetGroupChannel(m) => match channel_type {
-                SupportedChannelTypes::Group | SupportedChannelTypes::GroupAndExtended => {
-                    self.handle_set_group_channel(m)
-                }
-                _ => Err(Error::UnexpectedMessage(MESSAGE_TYPE_SET_GROUP_CHANNEL)),
-            },
-
-            _ => Err(Error::UnexpectedMessage(0)),
-        }
-    }
-
     fn handle_open_standard_mining_channel_success(
         &mut self,
         msg: OpenStandardMiningChannelSuccess,
     ) -> Result<Option<Mining<'static>>, Error> {
         let _ = msg;
-        Ok(None)
+        Err(Error::UnexpectedMessage(
+            MESSAGE_TYPE_OPEN_STANDARD_MINING_CHANNEL_SUCCESS,
+        ))
     }
 
     fn handle_open_extended_mining_channel_success(
@@ -259,7 +124,9 @@ where
         msg: OpenExtendedMiningChannelSuccess,
     ) -> Result<Option<Mining<'static>>, Error> {
         let _ = msg;
-        Ok(None)
+        Err(Error::UnexpectedMessage(
+            MESSAGE_TYPE_OPEN_EXTENDED_MINING_CHANNEL_SUCCESS,
+        ))
     }
 
     fn handle_open_mining_channel_error(
@@ -267,7 +134,9 @@ where
         msg: OpenMiningChannelError,
     ) -> Result<Option<Mining<'static>>, Error> {
         let _ = msg;
-        Ok(None)
+        Err(Error::UnexpectedMessage(
+            MESSAGE_TYPE_OPEN_MINING_CHANNEL_ERROR,
+        ))
     }
 
     fn handle_update_channel_error(
@@ -275,7 +144,7 @@ where
         msg: UpdateChannelError,
     ) -> Result<Option<Mining<'static>>, Error> {
         let _ = msg;
-        Ok(None)
+        Err(Error::UnexpectedMessage(MESSAGE_TYPE_UPDATE_CHANNEL_ERROR))
     }
 
     fn handle_close_channel(
@@ -283,7 +152,7 @@ where
         msg: CloseChannel,
     ) -> Result<Option<Mining<'static>>, Error> {
         let _ = msg;
-        Ok(None)
+        Err(Error::UnexpectedMessage(MESSAGE_TYPE_CLOSE_CHANNEL))
     }
 
     fn handle_set_extranonce_prefix(
@@ -291,7 +160,7 @@ where
         msg: SetExtranoncePrefix,
     ) -> Result<Option<Mining<'static>>, Error> {
         let _ = msg;
-        Ok(None)
+        Err(Error::UnexpectedMessage(MESSAGE_TYPE_SET_EXTRANONCE_PREFIX))
     }
 
     fn handle_submit_shares_success(
@@ -299,7 +168,7 @@ where
         msg: SubmitSharesSuccess,
     ) -> Result<Option<Mining<'static>>, Error> {
         let _ = msg;
-        Ok(None)
+        Err(Error::UnexpectedMessage(MESSAGE_TYPE_SUBMIT_SHARES_SUCCESS))
     }
 
     fn handle_submit_shares_error(
@@ -307,7 +176,7 @@ where
         msg: SubmitSharesError,
     ) -> Result<Option<Mining<'static>>, Error> {
         let _ = msg;
-        Ok(None)
+        Err(Error::UnexpectedMessage(MESSAGE_TYPE_SUBMIT_SHARES_ERROR))
     }
 
     fn handle_new_mining_job(
@@ -315,7 +184,7 @@ where
         msg: NewMiningJob,
     ) -> Result<Option<Mining<'static>>, Error> {
         let _ = msg;
-        Ok(None)
+        Err(Error::UnexpectedMessage(MESSAGE_TYPE_NEW_MINING_JOB))
     }
 
     fn handle_new_extended_mining_job(
@@ -323,15 +192,17 @@ where
         msg: NewExtendedMiningJob,
     ) -> Result<Option<Mining<'static>>, Error> {
         let _ = msg;
-        Ok(None)
+        Err(Error::UnexpectedMessage(
+            MESSAGE_TYPE_NEW_EXTENDED_MINING_JOB,
+        ))
     }
 
-    fn handle_set_new_prev_hash(
+    fn handle_set_new_prev_hash_mining(
         &mut self,
         msg: SetNewPrevHash,
     ) -> Result<Option<Mining<'static>>, Error> {
         let _ = msg;
-        Ok(None)
+        Err(Error::UnexpectedMessage(MESSAGE_TYPE_SET_NEW_PREV_HASH))
     }
 
     fn handle_set_custom_mining_job_success(
@@ -339,7 +210,9 @@ where
         msg: SetCustomMiningJobSuccess,
     ) -> Result<Option<Mining<'static>>, Error> {
         let _ = msg;
-        Ok(None)
+        Err(Error::UnexpectedMessage(
+            MESSAGE_TYPE_SET_CUSTOM_MINING_JOB_SUCCESS,
+        ))
     }
 
     fn handle_set_custom_mining_job_error(
@@ -347,17 +220,21 @@ where
         msg: SetCustomMiningJobError,
     ) -> Result<Option<Mining<'static>>, Error> {
         let _ = msg;
-        Ok(None)
+        Err(Error::UnexpectedMessage(
+            MESSAGE_TYPE_SET_CUSTOM_MINING_JOB_ERROR,
+        ))
     }
 
     fn handle_set_target(&mut self, msg: SetTarget) -> Result<Option<Mining<'static>>, Error> {
         let _ = msg;
-        Ok(None)
+        Err(Error::UnexpectedMessage(MESSAGE_TYPE_SET_TARGET))
     }
 
-    fn handle_set_group_channel(&mut self, msg: SetGroupChannel)
-        -> Result<Option<Mining<'static>>, Error> {
-            let _ = msg;
-            Ok(None)
-        }
+    fn handle_set_group_channel(
+        &mut self,
+        msg: SetGroupChannel,
+    ) -> Result<Option<Mining<'static>>, Error> {
+        let _ = msg;
+        Err(Error::UnexpectedMessage(MESSAGE_TYPE_SET_GROUP_CHANNEL))
+    }
 }
