@@ -69,7 +69,7 @@ pub trait ParseJobDeclarationMessagesFromUpstream {
 
     fn handle_declare_mining_job_error(
         &mut self,
-        message: DeclareMiningJobError,
+        msg: DeclareMiningJobError,
     ) -> Result<Option<JobDeclaration<'static>>, Error> {
         let _  = msg;
         Ok(None)
@@ -77,7 +77,7 @@ pub trait ParseJobDeclarationMessagesFromUpstream {
 
     fn handle_provide_missing_transactions(
         &mut self,
-        message: ProvideMissingTransactions,
+        msg: ProvideMissingTransactions,
     ) -> Result<Option<JobDeclaration<'static>>, Error> {
         let _  = msg;
         Ok(None)

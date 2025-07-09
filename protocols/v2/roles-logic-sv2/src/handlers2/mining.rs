@@ -9,8 +9,6 @@ use mining_sv2::{
     UpdateChannel, UpdateChannelError,
 };
 
-use crate::common_properties::{IsMiningDownstream, IsMiningUpstream};
-
 use mining_sv2::*;
 use std::fmt::Debug as D;
 
@@ -23,7 +21,7 @@ pub enum SupportedChannelTypes {
 }
 
 
-pub trait ParseMiningMessagesFromDownstream<Up: IsMiningUpstream + D>
+pub trait ParseMiningMessagesFromDownstream<Up: D>
 where
     Self: Sized + D,
 {
@@ -109,37 +107,55 @@ where
 
     fn handle_open_standard_mining_channel(
         &mut self,
-        m: OpenStandardMiningChannel,
-    ) -> Result<Option<Mining<'static>>, Error>;
+        msg: OpenStandardMiningChannel,
+    ) -> Result<Option<Mining<'static>>, Error> {
+        let _ = msg;
+        Ok(None)
+    }
 
     fn handle_open_extended_mining_channel(
         &mut self,
-        m: OpenExtendedMiningChannel,
-    ) -> Result<Option<Mining<'static>>, Error>;
+        msg: OpenExtendedMiningChannel,
+    ) -> Result<Option<Mining<'static>>, Error> {
+        let _ = msg;
+        Ok(None)
+    }
 
     fn handle_update_channel(
         &mut self,
-        m: UpdateChannel,
-    ) -> Result<Option<Mining<'static>>, Error>;
+        msg: UpdateChannel,
+    ) -> Result<Option<Mining<'static>>, Error> {
+        let _ = msg;
+        Ok(None)
+    }
 
     fn handle_submit_shares_standard(
         &mut self,
-        m: SubmitSharesStandard,
-    ) -> Result<Option<Mining<'static>>, Error>;
+        msg: SubmitSharesStandard,
+    ) -> Result<Option<Mining<'static>>, Error> {
+        let _ = msg;
+        Ok(None)
+    }
 
     fn handle_submit_shares_extended(
         &mut self,
-        m: SubmitSharesExtended,
-    ) -> Result<Option<Mining<'static>>, Error>;
+        msg: SubmitSharesExtended,
+    ) -> Result<Option<Mining<'static>>, Error> {
+        let _ = msg;
+        Ok(None)
+    }
 
     fn handle_set_custom_mining_job(
         &mut self,
-        m: SetCustomMiningJob,
-    ) -> Result<Option<Mining<'static>>, Error>;
+        msg: SetCustomMiningJob,
+    ) -> Result<Option<Mining<'static>>, Error> {
+        let _ = msg;
+        Ok(None)
+    }
 }
 
 
-pub trait ParseMiningMessagesFromUpstream<Down: IsMiningDownstream + D>
+pub trait ParseMiningMessagesFromUpstream<Down:D>
 where
     Self: Sized + D,
 {
@@ -232,71 +248,116 @@ where
 
     fn handle_open_standard_mining_channel_success(
         &mut self,
-        m: OpenStandardMiningChannelSuccess,
-    ) -> Result<Option<Mining<'static>>, Error>;
+        msg: OpenStandardMiningChannelSuccess,
+    ) -> Result<Option<Mining<'static>>, Error> {
+        let _ = msg;
+        Ok(None)
+    }
 
     fn handle_open_extended_mining_channel_success(
         &mut self,
-        m: OpenExtendedMiningChannelSuccess,
-    ) -> Result<Option<Mining<'static>>, Error>;
+        msg: OpenExtendedMiningChannelSuccess,
+    ) -> Result<Option<Mining<'static>>, Error> {
+        let _ = msg;
+        Ok(None)
+    }
 
     fn handle_open_mining_channel_error(
         &mut self,
-        m: OpenMiningChannelError,
-    ) -> Result<Option<Mining<'static>>, Error>;
+        msg: OpenMiningChannelError,
+    ) -> Result<Option<Mining<'static>>, Error> {
+        let _ = msg;
+        Ok(None)
+    }
 
     fn handle_update_channel_error(
         &mut self,
-        m: UpdateChannelError,
-    ) -> Result<Option<Mining<'static>>, Error>;
+        msg: UpdateChannelError,
+    ) -> Result<Option<Mining<'static>>, Error> {
+        let _ = msg;
+        Ok(None)
+    }
 
     fn handle_close_channel(
         &mut self,
-        m: CloseChannel,
-    ) -> Result<Option<Mining<'static>>, Error>;
+        msg: CloseChannel,
+    ) -> Result<Option<Mining<'static>>, Error> {
+        let _ = msg;
+        Ok(None)
+    }
 
     fn handle_set_extranonce_prefix(
         &mut self,
-        m: SetExtranoncePrefix,
-    ) -> Result<Option<Mining<'static>>, Error>;
+        msg: SetExtranoncePrefix,
+    ) -> Result<Option<Mining<'static>>, Error> {
+        let _ = msg;
+        Ok(None)
+    }
 
     fn handle_submit_shares_success(
         &mut self,
-        m: SubmitSharesSuccess,
-    ) -> Result<Option<Mining<'static>>, Error>;
+        msg: SubmitSharesSuccess,
+    ) -> Result<Option<Mining<'static>>, Error> {
+        let _ = msg;
+        Ok(None)
+    }
 
     fn handle_submit_shares_error(
         &mut self,
-        m: SubmitSharesError,
-    ) -> Result<Option<Mining<'static>>, Error>;
+        msg: SubmitSharesError,
+    ) -> Result<Option<Mining<'static>>, Error> {
+        let _ = msg;
+        Ok(None)
+    }
 
     fn handle_new_mining_job(
         &mut self,
-        m: NewMiningJob,
-    ) -> Result<Option<Mining<'static>>, Error>;
+        msg: NewMiningJob,
+    ) -> Result<Option<Mining<'static>>, Error> {
+        let _ = msg;
+        Ok(None)
+    }
 
     fn handle_new_extended_mining_job(
         &mut self,
-        m: NewExtendedMiningJob,
-    ) -> Result<Option<Mining<'static>>, Error>;
+        msg: NewExtendedMiningJob,
+    ) -> Result<Option<Mining<'static>>, Error> {
+        let _ = msg;
+        Ok(None)
+    }
 
     fn handle_set_new_prev_hash(
         &mut self,
-        m: SetNewPrevHash,
-    ) -> Result<Option<Mining<'static>>, Error>;
+        msg: SetNewPrevHash,
+    ) -> Result<Option<Mining<'static>>, Error> {
+        let _ = msg;
+        Ok(None)
+    }
 
     fn handle_set_custom_mining_job_success(
         &mut self,
-        m: SetCustomMiningJobSuccess,
-    ) -> Result<Option<Mining<'static>>, Error>;
+        msg: SetCustomMiningJobSuccess,
+    ) -> Result<Option<Mining<'static>>, Error> {
+        let _ = msg;
+        Ok(None)
+    }
 
     fn handle_set_custom_mining_job_error(
         &mut self,
-        m: SetCustomMiningJobError,
-    ) -> Result<Option<Mining<'static>>, Error>;
+        msg: SetCustomMiningJobError,
+    ) -> Result<Option<Mining<'static>>, Error> {
+        let _ = msg;
+        Ok(None)
+    }
 
-    fn handle_set_target(&mut self, m: SetTarget) -> Result<Option<Mining<'static>>, Error>;
+    fn handle_set_target(&mut self, msg: SetTarget) -> Result<Option<Mining<'static>>, Error> {
+        let _ = msg;
+        Ok(None)
+    }
 
-    fn handle_set_group_channel(&mut self, m: SetGroupChannel)
-        -> Result<Option<Mining<'static>>, Error>;
+    fn handle_set_group_channel(&mut self, msg: SetGroupChannel)
+        -> Result<Option<Mining<'static>>, Error> {
+            let _ = msg;
+            Ok(None)
+        }
 }
