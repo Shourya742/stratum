@@ -13,7 +13,7 @@ use crate::{
     utils::ShutdownMessage,
 };
 use async_channel::{Receiver, Sender};
-use network_helpers_sv2::sv1_connection::ConnectionSV1;
+use network_helpers_sv2::{codec_sv2::binary_sv2::Str0255, sv1_connection::ConnectionSV1};
 use std::{
     collections::HashMap,
     net::SocketAddr,
@@ -23,7 +23,7 @@ use std::{
     },
 };
 use stratum_common::roles_logic_sv2::{
-    mining_sv2::{SetTarget, Target},
+    mining_sv2::{CloseChannel, SetTarget, Target},
     parsers_sv2::Mining,
     utils::{hash_rate_to_target, Mutex},
     vardiff::classic::VardiffState,
@@ -186,7 +186,7 @@ impl Sv1Server {
                                 }
                                 d.downstreams.remove(&downstream_id)
                             });
-                            if current_downstream.is_some() {
+                            if let Some(downstream) = current_downstream {
                                 info!("🔌 Downstream: {downstream_id} disconnected and removed from sv1 server downstreams");
 
                                 // In aggregated mode, send UpdateChannel to reflect the new state (only if vardiff enabled)
@@ -196,6 +196,23 @@ impl Sv1Server {
                                         &self.sv1_server_channel_state.channel_manager_sender,
                                         self.config.aggregate_channels,
                                     ).await;
+                                }
+
+                                let channel_id = downstream.downstream_data.super_safe_lock(|d| d.channel_id);
+
+                                if let Some(channel_id) = channel_id {
+                                    if !self.config.aggregate_channels {
+                                        let reason_code =  Str0255::try_from("downstream disconnected".to_string()).unwrap();
+
+                                        _ = self.sv1_server_channel_state
+                                            .channel_manager_sender
+                                            .send(Mining::CloseChannel(CloseChannel {
+                                                channel_id,
+                                                reason_code,
+                                            }))
+                                            .await;
+                                    }
+
                                 }
                             }
                         }
