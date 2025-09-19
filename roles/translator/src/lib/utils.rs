@@ -177,7 +177,9 @@ pub fn message_from_frame(
 ) -> Result<(u8, Vec<u8>, AnyMessage<'static>), TproxyError> {
     match frame {
         Frame::Sv2(frame) => {
-            let header = frame.get_header().ok_or(TproxyError::UnexpectedMessage)?;
+            let header = frame
+                .get_header()
+                .ok_or(TproxyError::UnexpectedMessage(0))?;
             let message_type = header.msg_type();
             let mut payload = frame.payload().to_vec();
             let message: Result<AnyMessage<'_>, _> =
@@ -189,13 +191,13 @@ pub fn message_from_frame(
                 }
                 Err(_) => {
                     error!("Received frame with invalid payload or message type: {frame:?}");
-                    Err(TproxyError::UnexpectedMessage)
+                    Err(TproxyError::UnexpectedMessage(message_type))
                 }
             }
         }
         Frame::HandShake(f) => {
             error!("Received unexpected handshake frame: {f:?}");
-            Err(TproxyError::UnexpectedMessage)
+            Err(TproxyError::UnexpectedMessage(0))
         }
     }
 }
@@ -232,7 +234,7 @@ pub fn into_static(m: AnyMessage<'_>) -> Result<AnyMessage<'static>, TproxyError
                 m.into_static(),
             ))),
         },
-        _ => Err(TproxyError::UnexpectedMessage),
+        _ => Err(TproxyError::UnexpectedMessage(0)),
     }
 }
 

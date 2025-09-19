@@ -242,7 +242,7 @@ impl Upstream {
 
         let payload = incoming.payload();
 
-        self.handle_common_message_from_server(message_type, payload)
+        self.handle_common_message_frame_from_server(message_type, payload)
             .await?;
         debug!("Upstream: handshake completed successfully.");
         Ok(())
@@ -273,7 +273,7 @@ impl Upstream {
                     AnyMessage::Common(_) => {
                         // Handle common upstream messages
                         upstream
-                            .handle_common_message_from_server(messsage_type, &mut payload)
+                            .handle_common_message_frame_from_server(messsage_type, &mut payload)
                             .await?;
                     }
 
@@ -292,7 +292,7 @@ impl Upstream {
 
                     _ => {
                         error!("Received unsupported message type from upstream.");
-                        return Err(TproxyError::UnexpectedMessage);
+                        return Err(TproxyError::UnexpectedMessage(0));
                     }
                 }
             }

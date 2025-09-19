@@ -210,7 +210,7 @@ impl ChannelManager {
         match message {
             Message::Mining(_) => {
                 channel_manager
-                    .handle_mining_message_from_server(message_type, &mut payload)
+                    .handle_mining_message_frame_from_server(message_type, &mut payload)
                     .await?;
             }
             _ => {

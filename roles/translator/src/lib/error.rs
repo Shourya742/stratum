@@ -13,7 +13,7 @@ use std::{fmt, sync::PoisonError};
 use stratum_common::roles_logic_sv2::{
     codec_sv2::{self, binary_sv2, framing_sv2},
     errors::Error as RolesLogicError,
-    handlers_sv2::HandlerError,
+    handlers_sv2::HandlerErrorType,
     parsers_sv2::ParserError as RolesParserError,
     Error as RolesSv2Error,
 };
@@ -30,8 +30,6 @@ pub enum TproxyError {
     RolesSv2LogicError(RolesSv2Error),
     /// Error from roles logic parser library
     ParserError(RolesParserError),
-    /// Error from roles logic handlers Library
-    RolesSv2LogicHandlerError(HandlerError),
     /// Errors on bad CLI argument input.
     BadCliArgs,
     /// Errors on bad `serde_json` serialize/deserialize.
@@ -63,7 +61,7 @@ pub enum TproxyError {
     /// Error converting SetDifficulty to Message
     SetDifficultyToMessage(SetDifficulty),
     /// Received an unexpected message type
-    UnexpectedMessage,
+    UnexpectedMessage(u8),
     /// Job not found during share validation
     JobNotFound,
     /// Invalid merkle root during share validation
@@ -104,8 +102,11 @@ impl fmt::Display for TproxyError {
             SetDifficultyToMessage(ref e) => {
                 write!(f, "Error converting SetDifficulty to Message: `{e:?}`")
             }
-            UnexpectedMessage => {
-                write!(f, "Received a message type that was not expected")
+            UnexpectedMessage(message_type) => {
+                write!(
+                    f,
+                    "Received a message type that was not expected: {message_type}"
+                )
             }
             JobNotFound => write!(f, "Job not found during share validation"),
             InvalidMerkleRoot => write!(f, "Invalid merkle root during share validation"),
@@ -118,7 +119,6 @@ impl fmt::Display for TproxyError {
             NetworkHelpersError(ref e) => write!(f, "Network helpers error: {e:?}"),
             RolesSv2LogicError(ref e) => write!(f, "Roles logic error: {e:?}"),
             ParserError(ref e) => write!(f, "Roles logic parser error: {e:?}"),
-            RolesSv2LogicHandlerError(ref e) => write!(f, "Roles logic handler error: {e:?}"),
         }
     }
 }
@@ -126,12 +126,6 @@ impl fmt::Display for TproxyError {
 impl From<binary_sv2::Error> for TproxyError {
     fn from(e: binary_sv2::Error) -> Self {
         TproxyError::BinarySv2(e)
-    }
-}
-
-impl From<HandlerError> for TproxyError {
-    fn from(value: HandlerError) -> Self {
-        TproxyError::RolesSv2LogicHandlerError(value)
     }
 }
 
@@ -214,8 +208,12 @@ impl From<stratum_translation::error::StratumTranslationError> for TproxyError {
     }
 }
 
-impl From<TproxyError> for HandlerError {
-    fn from(value: TproxyError) -> Self {
-        HandlerError::External(value.into())
+impl HandlerErrorType for TproxyError {
+    fn parse_error(error: RolesParserError) -> Self {
+        TproxyError::ParserError(error)
+    }
+
+    fn unexpected_message(message_type: u8) -> Self {
+        TproxyError::UnexpectedMessage(message_type)
     }
 }
