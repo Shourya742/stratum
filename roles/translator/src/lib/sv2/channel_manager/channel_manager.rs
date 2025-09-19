@@ -567,6 +567,20 @@ impl ChannelManager {
                         TproxyError::ChannelErrorSender
                     })?;
             }
+            Mining::CloseChannel(m) => {
+                debug!("Received CloseChannel from SV1Server: {m}");
+                let frame = StdFrame::try_from(Message::Mining(Mining::CloseChannel(m)))
+                    .map_err(TproxyError::ParserError)?;
+
+                self.channel_state
+                    .upstream_sender
+                    .send(frame.into())
+                    .await
+                    .map_err(|e| {
+                        error!("Failed to send UpdateChannel message to upstream: {:?}", e);
+                        TproxyError::ChannelErrorSender
+                    })?;
+            }
             _ => {
                 warn!("Unhandled downstream message: {:?}", message);
             }

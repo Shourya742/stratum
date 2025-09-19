@@ -201,9 +201,9 @@ impl Sv1Server {
                                 let channel_id = downstream.downstream_data.super_safe_lock(|d| d.channel_id);
 
                                 if let Some(channel_id) = channel_id {
+                                    info!("Sending close channel message: {channel_id} for downstream: {downstream_id}");
                                     if !self.config.aggregate_channels {
                                         let reason_code =  Str0255::try_from("downstream disconnected".to_string()).unwrap();
-
                                         _ = self.sv1_server_channel_state
                                             .channel_manager_sender
                                             .send(Mining::CloseChannel(CloseChannel {

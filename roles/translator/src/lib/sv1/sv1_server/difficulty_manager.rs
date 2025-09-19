@@ -64,21 +64,10 @@ impl DifficultyManager {
                             break 'vardiff_loop;
                         }
                         Ok(ShutdownMessage::DownstreamShutdown(downstream_id)) => {
-                            let current_downstream = sv1_server_data.super_safe_lock(|d| {
+                            sv1_server_data.super_safe_lock(|d| {
                                 // Also remove from vardiff map
                                 d.vardiff.remove(&downstream_id);
-                                d.downstreams.remove(&downstream_id)
                             });
-                            if current_downstream.is_some() {
-                                info!("🔌 Downstream: {downstream_id} disconnected and removed from sv1 server downstreams");
-
-                                // In aggregated mode, send UpdateChannel to reflect the new state
-                                Self::send_update_channel_on_downstream_state_change(
-                                    &sv1_server_data,
-                                    &channel_manager_sender,
-                                    is_aggregated,
-                                ).await;
-                            }
                         }
                         Ok(ShutdownMessage::DownstreamShutdownAll) => {
                             sv1_server_data.super_safe_lock(|d|{
